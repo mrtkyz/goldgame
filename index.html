@@ -100,23 +100,48 @@
   });
   addEventListener('pointerup', () => { pointerX = null; pointerY = null; });
 
-  // ---- Sesler (WebAudio ile küçük bip'ler) ----
+  // ---- Sesler (WebAudio ile sentezlenir, ses dosyası yok) ----
   let audioCtx = null;
-  function beep(freq, dur, type = 'sine', vol = 0.15) {
+  function getAudio() {
     try {
       audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-      const o = audioCtx.createOscillator();
-      const g = audioCtx.createGain();
-      o.type = type;
-      o.frequency.value = freq;
-      g.gain.setValueAtTime(vol, audioCtx.currentTime);
-      g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
-      o.connect(g).connect(audioCtx.destination);
-      o.start();
-      o.stop(audioCtx.currentTime + dur);
-    } catch (e) { /* ses desteklenmiyorsa sorun değil */ }
+      return audioCtx;
+    } catch (e) { return null; }
   }
-  const sndCoin = () => { beep(880, 0.12, 'triangle'); beep(1320, 0.15, 'triangle', 0.1); };
+  function beep(freq, dur, type = 'sine', vol = 0.15) {
+    const ac = getAudio();
+    if (!ac) return;
+    const o = ac.createOscillator();
+    const g = ac.createGain();
+    o.type = type;
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(vol, ac.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + dur);
+    o.connect(g).connect(ac.destination);
+    o.start();
+    o.stop(ac.currentTime + dur);
+  }
+  // Madeni para tınısı: inharmonik yüksek frekanslı kısa çınlama
+  function coinClink(delay, vol) {
+    const ac = getAudio();
+    if (!ac) return;
+    const t0 = ac.currentTime + delay;
+    const partials = [[2510, 1], [3730, 0.55], [5280, 0.35], [6710, 0.2]];
+    for (const [f, a] of partials) {
+      const o = ac.createOscillator();
+      const g = ac.createGain();
+      o.type = 'sine';
+      o.frequency.value = f * (0.98 + Math.random() * 0.04);
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(vol * a, t0 + 0.004);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.12 + Math.random() * 0.06);
+      o.connect(g).connect(ac.destination);
+      o.start(t0);
+      o.stop(t0 + 0.25);
+    }
+  }
+  // Bozuk para düşme sesi: ilk çarpma + gittikçe sönen sekmeler
+  const sndCoin = () => { coinClink(0, 0.22); coinClink(0.085, 0.12); coinClink(0.16, 0.06); };
   const sndGem  = () => { beep(660, 0.1, 'sine'); beep(990, 0.12, 'sine'); beep(1480, 0.2, 'sine', 0.12); };
   const sndBomb = () => beep(110, 0.4, 'sawtooth', 0.2);
   const sndOver = () => { beep(330, 0.25, 'square', 0.1); setTimeout(() => beep(220, 0.4, 'square', 0.1), 200); };
