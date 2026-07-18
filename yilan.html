@@ -47,6 +47,36 @@
     text-decoration: none;
   }
 
+  /* Ayarlar menüsü */
+  #settings {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+  }
+  #settings button {
+    border: 2px solid rgba(127, 255, 158, 0.5);
+    background: rgba(8, 30, 18, 0.85);
+    color: #7fff9e;
+    border-radius: 999px;
+    font-size: 16px;
+    padding: 10px 18px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #gear {
+    width: 46px;
+    height: 46px;
+    padding: 0 !important;
+    font-size: 24px;
+    border-radius: 50% !important;
+  }
+  #menu { display: flex; flex-direction: column; gap: 8px; }
+  #menu.hidden { display: none; }
+
   /* Ekran yön tuşları: sadece dokunmatik cihazlarda görünür */
   #dpad {
     display: none;
@@ -81,6 +111,14 @@
 </head>
 <body>
 <a id="back" href="index.html">← Oyunlar</a>
+<div id="settings">
+  <button id="gear" aria-label="Ayarlar">⚙</button>
+  <div id="menu" class="hidden">
+    <button id="btnPause">⏸ Durdur</button>
+    <button id="btnStart">▶ Başlat</button>
+    <button id="btnExit">✕ Çık</button>
+  </div>
+</div>
 <div id="wrap"><canvas id="game" width="480" height="624"></canvas></div>
 <div id="dpad">
   <button data-dir="0,-1" aria-label="Yukarı">▲</button>
@@ -111,6 +149,7 @@
   // ---- Oyun durumu ----
   const STATE = { MENU: 0, PLAYING: 1, OVER: 2 };
   let state = STATE.MENU;
+  let paused = false;
 
   let snake, dir, food, score, eaten, stepTime, stepAcc;
   let best = +(localStorage.getItem('yilan-best') || 0);
@@ -124,6 +163,7 @@
     stepAcc = 0;
     placeFood();
     state = STATE.PLAYING;
+    paused = false;
   }
 
   function placeFood() {
@@ -223,6 +263,24 @@
   addEventListener('pointermove', e => trySwipe(e.clientX, e.clientY));
   addEventListener('pointerup', e => { trySwipe(e.clientX, e.clientY); touchStart = null; });
 
+  // Ayarlar menüsü
+  const menuEl = document.getElementById('menu');
+  document.getElementById('gear').addEventListener('click', () => {
+    menuEl.classList.toggle('hidden');
+  });
+  document.getElementById('btnPause').addEventListener('click', () => {
+    if (state === STATE.PLAYING) paused = true;
+    menuEl.classList.add('hidden');
+  });
+  document.getElementById('btnStart').addEventListener('click', () => {
+    if (state !== STATE.PLAYING) startGame();
+    paused = false;
+    menuEl.classList.add('hidden');
+  });
+  document.getElementById('btnExit').addEventListener('click', () => {
+    location.href = 'index.html';
+  });
+
   // Ekran yön tuşları (mobil)
   for (const btn of document.querySelectorAll('#dpad button')) {
     const [bx, by] = btn.dataset.dir.split(',').map(Number);
@@ -261,7 +319,7 @@
   }
 
   function update(dt) {
-    if (state !== STATE.PLAYING) return;
+    if (state !== STATE.PLAYING || paused) return;
     stepAcc += dt;
     while (stepAcc >= stepTime) {
       stepAcc -= stepTime;
@@ -400,6 +458,12 @@
         ['Ok tuşları / WASD veya kaydırarak oyna', 16, '#aaa'],
         ['Dikkat: yedikçe hızlanırsın!', 16, '#ffb020'],
         ['Başlamak için tıkla veya SPACE', 20, '#ffd54a'],
+      ]);
+    } else if (paused && state === STATE.PLAYING) {
+      drawCenteredPanel([
+        ['DURAKLATILDI', 40, '#ffd54a'],
+        ['', 10, '#fff'],
+        ['Devam etmek için Ayarlar > Başlat', 18, '#ddd'],
       ]);
     } else if (state === STATE.OVER) {
       drawCenteredPanel([
