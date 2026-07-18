@@ -354,17 +354,20 @@
   }
 
   function drawHUD() {
-    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    // Skor: emoji yerine çizilmiş altın (bazı telefonlar canvas'ta emoji gösteremiyor)
+    drawCoin(30, 28, 13, 0);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     ctx.fillStyle = '#ffd54a';
     ctx.font = 'bold 26px sans-serif';
-    ctx.fillText('🪙 ' + score, 16, 14);
+    ctx.fillText(String(score), 50, 29);
+    ctx.textBaseline = 'top';
     ctx.fillStyle = '#bbb';
     ctx.font = '15px sans-serif';
     ctx.fillText('Rekor: ' + best + '   Seviye: ' + level, 16, 46);
-    // canlar
-    ctx.textAlign = 'right';
-    ctx.font = '24px sans-serif';
-    ctx.fillText('❤️'.repeat(lives), W - 14, 16);
+    // Canlar: emoji yerine çizilmiş kalpler
+    for (let i = 0; i < lives; i++) {
+      drawHeart(W - 26 - i * 30, 28, 12);
+    }
   }
 
   function drawCenteredPanel(lines) {
@@ -373,6 +376,11 @@
     ctx.textAlign = 'center';
     let y = H * 0.30;
     for (const [text, size, color] of lines) {
+      if (text === '@coin') {
+        drawCoin(W / 2, y - size * 0.3, size * 0.5, 0);
+        y += size * 1.6;
+        continue;
+      }
       ctx.fillStyle = color;
       ctx.font = 'bold ' + size + 'px sans-serif';
       ctx.fillText(text, W / 2, y);
@@ -422,7 +430,7 @@
       drawCenteredPanel([
         ["Talha'nın", 34, '#fff'],
         ['ALTIN OYUNU', 44, '#ffd54a'],
-        ['🪙', 60, '#fff'],
+        ['@coin', 60, '#fff'],
         ['Keseyi her yöne hareket ettirip altınları topla!', 18, '#ddd'],
         ['Elmas +50 · Kalp +1 can · Bombadan kaç!', 16, '#aaa'],
         ['Ok tuşları / WASD veya dokunarak oyna', 16, '#aaa'],
@@ -433,7 +441,7 @@
       drawCenteredPanel([
         ['OYUN BİTTİ', 44, '#ff6b6b'],
         ['Skorun: ' + score, 30, '#ffd54a'],
-        [score >= best && score > 0 ? '🎉 YENİ REKOR! 🎉' : 'Rekor: ' + best, 24, '#7fff9e'],
+        [score >= best && score > 0 ? '★ YENİ REKOR! ★' : 'Rekor: ' + best, 24, '#7fff9e'],
         ['', 10, '#fff'],
         ['Tekrar oynamak için tıkla veya SPACE', 20, '#ddd'],
       ]);
