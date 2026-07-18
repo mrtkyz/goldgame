@@ -24,6 +24,12 @@ else
 fi
 systemctl enable --now docker
 
+echo "==> Host üzerindeki nginx kontrol ediliyor (80 portu Docker container'ına kalmalı)"
+if systemctl is-active --quiet nginx 2>/dev/null; then
+  echo "    Host'ta nginx çalışıyor; 80 portunu boşaltmak için durdurulup devre dışı bırakılıyor."
+  systemctl disable --now nginx
+fi
+
 echo "==> Uygulama dizini oluşturuluyor: ${SITE_DIR}"
 mkdir -p "${SITE_DIR}"
 
