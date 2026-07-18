@@ -81,7 +81,7 @@
 </head>
 <body>
 <a id="back" href="index.html">← Oyunlar</a>
-<div id="wrap"><canvas id="game" width="480" height="640"></canvas></div>
+<div id="wrap"><canvas id="game" width="480" height="624"></canvas></div>
 <div id="dpad">
   <button data-dir="0,-1" aria-label="Yukarı">▲</button>
   <div class="mid">
@@ -96,8 +96,8 @@
   const ctx = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
 
-  const CELL = 24;                 // hücre boyutu
-  const COLS = 20, ROWS = 24;      // oyun alanı: 20x24 hücre
+  const CELL = 40;                 // hücre boyutu (büyük kareler = kolay nişan)
+  const COLS = 12, ROWS = 14;      // oyun alanı: 12x14 hücre
   const TOP = 64;                  // üstteki HUD şeridi
 
   function fit() {
@@ -116,11 +116,11 @@
   let best = +(localStorage.getItem('yilan-best') || 0);
 
   function startGame() {
-    snake = [{ x: 9, y: 12 }, { x: 8, y: 12 }, { x: 7, y: 12 }];
+    snake = [{ x: 5, y: 7 }, { x: 4, y: 7 }, { x: 3, y: 7 }];
     dir = { x: 1, y: 0 };
     dirQueue = [];
     score = 0; eaten = 0;
-    stepTime = 0.18;   // saniye cinsinden adım süresi; yedikçe kısalır
+    stepTime = 0.24;   // saniye cinsinden adım süresi; yedikçe kısalır
     stepAcc = 0;
     placeFood();
     state = STATE.PLAYING;
@@ -239,7 +239,7 @@
       // Yedi: büyür (kuyruk kesilmez), hızlanır
       score += 10;
       eaten++;
-      stepTime = Math.max(0.08, 0.18 - eaten * 0.003);
+      stepTime = Math.max(0.1, 0.24 - eaten * 0.004);
       sndEat();
       placeFood();
     } else {
@@ -279,18 +279,18 @@
   function drawFood(t) {
     const pulse = 1 + 0.15 * Math.sin(t * 6);
     const x = cx(food.x), y = cy(food.y);
-    const g = ctx.createRadialGradient(x - 2, y - 2, 1, x, y, 9 * pulse);
+    const g = ctx.createRadialGradient(x - 3, y - 3, 1, x, y, 15 * pulse);
     g.addColorStop(0, '#ffe89a');
     g.addColorStop(1, '#e0a419');
     ctx.beginPath();
-    ctx.arc(x, y, 8 * pulse, 0, Math.PI * 2);
+    ctx.arc(x, y, 13 * pulse, 0, Math.PI * 2);
     ctx.fillStyle = g;
     ctx.fill();
     // parlak halka
     ctx.strokeStyle = 'rgba(255, 232, 154, 0.35)';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.arc(x, y, 11 * pulse, 0, Math.PI * 2);
+    ctx.arc(x, y, 17 * pulse, 0, Math.PI * 2);
     ctx.stroke();
   }
 
@@ -299,9 +299,9 @@
     for (let i = snake.length - 1; i >= 0; i--) {
       const s = snake[i];
       const f = i / Math.max(1, snake.length - 1);       // 0=baş, 1=kuyruk
-      const rad = 10 - f * 3.5;
+      const rad = 17 - f * 6;
       const x = cx(s.x), y = cy(s.y);
-      const g = ctx.createRadialGradient(x - 3, y - 3, 1, x, y, rad + 2);
+      const g = ctx.createRadialGradient(x - 5, y - 5, 1, x, y, rad + 3);
       g.addColorStop(0, i === 0 ? '#a8ff9e' : '#63d97a');
       g.addColorStop(1, i === 0 ? '#3faf4e' : '#2a7e3c');
       ctx.beginPath();
@@ -312,14 +312,14 @@
     // baş: gözler
     const h = snake[0];
     const hx = cx(h.x), hy = cy(h.y);
-    const ex = dir.y === 0 ? 0 : 4, ey = dir.x === 0 ? 0 : 4; // göz dizilimi yöne dik
+    const ex = dir.y === 0 ? 0 : 7, ey = dir.x === 0 ? 0 : 7; // göz dizilimi yöne dik
     for (const sgn of [-1, 1]) {
       ctx.beginPath();
-      ctx.arc(hx + sgn * ex + dir.x * 3, hy + sgn * ey + dir.y * 3, 3, 0, Math.PI * 2);
+      ctx.arc(hx + sgn * ex + dir.x * 5, hy + sgn * ey + dir.y * 5, 5, 0, Math.PI * 2);
       ctx.fillStyle = '#fff';
       ctx.fill();
       ctx.beginPath();
-      ctx.arc(hx + sgn * ex + dir.x * 4.5, hy + sgn * ey + dir.y * 4.5, 1.5, 0, Math.PI * 2);
+      ctx.arc(hx + sgn * ex + dir.x * 7.5, hy + sgn * ey + dir.y * 7.5, 2.5, 0, Math.PI * 2);
       ctx.fillStyle = '#123';
       ctx.fill();
     }
