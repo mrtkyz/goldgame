@@ -77,21 +77,28 @@
   });
   addEventListener('keyup', e => keys[e.key] = false);
 
-  // Dokunmatik / fare: parmağın olduğu yere doğru git
-  let pointerX = null;
+  // Dokunmatik / fare: parmağın olduğu yere doğru git (her yöne)
+  let pointerX = null, pointerY = null;
   function pointerPos(e) {
     const r = canvas.getBoundingClientRect();
     const t = e.touches ? e.touches[0] : e;
-    return (t.clientX - r.left) / r.width * W;
+    return {
+      x: (t.clientX - r.left) / r.width * W,
+      y: (t.clientY - r.top) / r.height * H,
+    };
   }
   canvas.addEventListener('pointerdown', e => {
     if (state !== STATE.PLAYING) { startGame(); return; }
-    pointerX = pointerPos(e);
+    const p = pointerPos(e);
+    pointerX = p.x; pointerY = p.y;
   });
   canvas.addEventListener('pointermove', e => {
-    if (pointerX !== null) pointerX = pointerPos(e);
+    if (pointerX !== null) {
+      const p = pointerPos(e);
+      pointerX = p.x; pointerY = p.y;
+    }
   });
-  addEventListener('pointerup', () => pointerX = null);
+  addEventListener('pointerup', () => { pointerX = null; pointerY = null; });
 
   // ---- Sesler (WebAudio ile küçük bip'ler) ----
   let audioCtx = null;
@@ -121,6 +128,7 @@
     items = []; sparkles = []; floaters = [];
     spawnTimer = 0; elapsed = 0;
     player.x = W / 2;
+    player.y = H - 80;
   }
 
   function gameOver() {
@@ -134,12 +142,15 @@
 
   // ---- Nesne üretimi ----
   function spawnItem() {
+    // Seviye yükseldikçe bomba oranı artar, kalp nadirleşir
+    const bombChance = Math.min(0.40, 0.16 + (level - 1) * 0.03);
+    const heartChance = Math.max(0.03, 0.08 - (level - 1) * 0.005);
     const r = Math.random();
     let type;
-    if (r < 0.62) type = 'coin';        // altın: +10
-    else if (r < 0.72) type = 'gem';    // elmas: +50
-    else if (r < 0.80) type = 'heart';  // kalp: +1 can (nadir)
-    else type = 'bomb';                 // bomba: -1 can
+    if (r < bombChance) type = 'bomb';                       // bomba: -1 can
+    else if (r < bombChance + 0.10) type = 'gem';            // elmas: +50
+    else if (r < bombChance + 0.10 + heartChance) type = 'heart'; // kalp: +1 can
+    else type = 'coin';                                      // altın: +10
     if (type === 'heart' && lives >= 5) type = 'coin';
 
     items.push({
@@ -147,7 +158,7 @@
       x: 30 + Math.random() * (W - 60),
       y: -30,
       r: type === 'gem' ? 14 : 16,
-      vy: (140 + Math.random() * 90) * (1 + (level - 1) * 0.15),
+      vy: (150 + Math.random() * 100) * (1 + (level - 1) * 0.22),
       spin: Math.random() * Math.PI * 2,
     });
   }
@@ -169,24 +180,35 @@
     if (state !== STATE.PLAYING) return;
 
     elapsed += dt;
-    level = 1 + Math.floor(elapsed / 20);   // her 20 saniyede seviye artar
-
-    // Oyuncu hareketi
-    let dir = 0;
-    if (keys['ArrowLeft'] || keys['a'] || keys['A']) dir -= 1;
-    if (keys['ArrowRight'] || keys['d'] || keys['D']) dir += 1;
-    if (pointerX !== null) {
-      const diff = pointerX - player.x;
-      if (Math.abs(diff) > 6) dir = Math.sign(diff);
+    const newLevel = 1 + Math.floor(elapsed / 15);   // her 15 saniyede seviye artar
+    if (newLevel > level) {
+      level = newLevel;
+      addFloater(W / 2, H / 2, 'SEVİYE ' + level + '!', '#7fff9e');
     }
-    player.x += dir * player.speed * dt;
-    player.x = Math.max(player.w / 2, Math.min(W - player.w / 2, player.x));
 
-    // Nesne üret
+    // Oyuncu hareketi: her yöne serbest
+    let dx = 0, dy = 0;
+    if (keys['ArrowLeft'] || keys['a'] || keys['A']) dx -= 1;
+    if (keys['ArrowRight'] || keys['d'] || keys['D']) dx += 1;
+    if (keys['ArrowUp'] || keys['w'] || keys['W']) dy -= 1;
+    if (keys['ArrowDown'] || keys['s'] || keys['S']) dy += 1;
+    if (pointerX !== null) {
+      const diffX = pointerX - player.x;
+      const diffY = pointerY - player.y;
+      dx = Math.abs(diffX) > 6 ? Math.sign(diffX) : 0;
+      dy = Math.abs(diffY) > 6 ? Math.sign(diffY) : 0;
+    }
+    if (dx !== 0 && dy !== 0) { dx *= 0.7071; dy *= 0.7071; } // çapraz hız sabit kalsın
+    player.x += dx * player.speed * dt;
+    player.y += dy * player.speed * dt;
+    player.x = Math.max(player.w / 2, Math.min(W - player.w / 2, player.x));
+    player.y = Math.max(80, Math.min(H - player.h - 10, player.y));
+
+    // Nesne üret: seviye arttıkça daha sık
     spawnTimer -= dt;
     if (spawnTimer <= 0) {
       spawnItem();
-      spawnTimer = Math.max(0.25, 0.9 - level * 0.06);
+      spawnTimer = Math.max(0.15, 0.85 - level * 0.07);
     }
 
     // Nesneleri güncelle + çarpışma
@@ -401,9 +423,10 @@
         ["Talha'nın", 34, '#fff'],
         ['ALTIN OYUNU', 44, '#ffd54a'],
         ['🪙', 60, '#fff'],
-        ['Keseyi hareket ettirip altınları topla!', 18, '#ddd'],
+        ['Keseyi her yöne hareket ettirip altınları topla!', 18, '#ddd'],
         ['Elmas +50 · Kalp +1 can · Bombadan kaç!', 16, '#aaa'],
-        ['Ok tuşları / A-D veya dokunarak oyna', 16, '#aaa'],
+        ['Ok tuşları / WASD veya dokunarak oyna', 16, '#aaa'],
+        ['Dikkat: oyun gittikçe hızlanır!', 16, '#ffb020'],
         ['Başlamak için tıkla veya SPACE', 20, '#7fff9e'],
       ]);
     } else if (state === STATE.OVER) {
