@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>Bisiklet Oyunu</title>
+<title>Bisiklet Yarışı</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -121,8 +121,10 @@
   const W = canvas.width, H = canvas.height;
 
   const HORIZON = 300;          // ufuk çizgisi
-  const ROADHALF = 340;         // yolun en yakın yarı genişliği (px)
-  const BEND = 320;             // virajın ufuktaki bükülme miktarı (px)
+  const ROADHALF = 250;         // dar sokak: yolun en yakın yarı genişliği
+  const BEND = 300;             // virajın ufuktaki bükülme miktarı
+  const RACE_UNITS = 1000;      // yarış uzunluğu (1 birim = 2 m -> 2000 m)
+  const RIVAL_COUNT = 9;
 
   function fit() {
     const scale = Math.min(innerWidth / W, innerHeight / H);
@@ -137,20 +139,71 @@
   let state = STATE.MENU;
   let paused = false;
 
-  let distance, speed, playerX, lives, elapsed;
+  let distance, speed, playerX, elapsed, countT, finalRank;
   let curveCur, curveTarget, sectionEnd;
-  let obstacles, trees, nextObstZ, nextTreeZ;
-  let invTimer, flashTimer, rumbleAcc, shake;
-  let best = +(localStorage.getItem('bisiklet-best') || 0);
+  let rivals, buildings, crowds, nextBldZ, nextCrowdZ;
+  let bumpT, shake, rumbleAcc;
+  let bestRank = +(localStorage.getItem('bisiklet-best-rank') || 0); // 0 = henüz yok
+
+  const JERSEYS = ['#e74c3c', '#3498db', '#f1c40f', '#9b59b6', '#e67e22', '#1abc9c', '#ff6b9d', '#2ecc71', '#f5f5f5'];
+  const BLD_COLORS = ['#c9866b', '#b8a06a', '#8fa3b8', '#a08ab5', '#c2b280', '#9db884', '#b87f7f'];
+  const SHIRTS = ['#e74c3c', '#3498db', '#f1c40f', '#2ecc71', '#e67e22', '#ff6b9d', '#ecf0f1', '#9b59b6'];
 
   function resetWorld() {
-    distance = 0; speed = 6; playerX = 0; lives = 3; elapsed = 0;
-    curveCur = 0; curveTarget = 0; sectionEnd = 40;
-    obstacles = []; trees = [];
-    nextObstZ = 50; nextTreeZ = 8;
-    invTimer = 0; flashTimer = 0; rumbleAcc = 0; shake = 0;
+    distance = 0; speed = 0; playerX = 0; elapsed = 0;
+    countT = 3.5; finalRank = 0;
+    curveCur = 0; curveTarget = 0; sectionEnd = 35;
+    bumpT = 0; shake = 0; rumbleAcc = 0;
+
+    rivals = [];
+    for (let i = 0; i < RIVAL_COUNT; i++) {
+      rivals.push({
+        z: 2 + (i % 3) * 2.2,                       // start çizgisinde küme halinde
+        x: -0.6 + (i % 5) * 0.3 + Math.random() * 0.1,
+        s: 0,
+        target: 15.5 + Math.random() * 6,            // her rakibin kendi temposu
+        wob: Math.random() * Math.PI * 2,
+        jersey: JERSEYS[i % JERSEYS.length],
+        passed: false,
+      });
+    }
+
+    buildings = []; crowds = [];
+    nextBldZ = 2; nextCrowdZ = 3;
+    seedScenery();
   }
-  resetWorld(); // menü ekranındaki yol çizimi için de dünya hazır olsun
+
+  function seedScenery() {
+    while (nextBldZ < 50) spawnBuildings();
+    while (nextCrowdZ < 50) spawnCrowd();
+  }
+  function spawnBuildings() {
+    for (const side of [-1, 1]) {
+      buildings.push({
+        z: nextBldZ + Math.random() * 1.2,
+        x: side * (1.55 + Math.random() * 0.25),
+        h: 230 + Math.random() * 190,
+        w: 150 + Math.random() * 70,
+        color: BLD_COLORS[Math.floor(Math.random() * BLD_COLORS.length)],
+      });
+    }
+    nextBldZ += 4;
+  }
+  function spawnCrowd() {
+    for (const side of [-1, 1]) {
+      if (Math.random() < 0.85) {
+        crowds.push({
+          z: nextCrowdZ + Math.random(),
+          x: side * (1.14 + Math.random() * 0.12),
+          n: 3 + Math.floor(Math.random() * 3),
+          seed: Math.random() * 100,
+        });
+      }
+    }
+    nextCrowdZ += 2.4;
+  }
+
+  resetWorld(); // menü arkaplanı için dünya hazır
 
   function startGame() {
     resetWorld();
@@ -158,15 +211,17 @@
     paused = false;
   }
 
-  function gameOver() {
-    state = STATE.OVER;
-    sndOver();
-    const m = Math.floor(distance * 2);
-    if (m > best) {
-      best = m;
-      localStorage.setItem('bisiklet-best', best);
+  function finishRace() {
+    finalRank = rank();
+    if (bestRank === 0 || finalRank < bestRank) {
+      bestRank = finalRank;
+      localStorage.setItem('bisiklet-best-rank', bestRank);
     }
+    state = STATE.OVER;
+    if (finalRank === 1) { sndWin(); } else { sndFinish(); }
   }
+
+  const rank = () => 1 + rivals.filter(r => r.z > distance).length;
 
   // ---- Sesler ----
   let audioCtx = null;
@@ -190,9 +245,13 @@
     o.start(t0);
     o.stop(t0 + dur);
   }
-  const sndCrash = () => { beep(120, 0.25, 'sawtooth', 0.22); beep(75, 0.4, 'sawtooth', 0.18, 0.05); };
-  const sndOver = () => { beep(330, 0.25, 'square', 0.1); beep(220, 0.4, 'square', 0.1, 0.2); };
+  const sndBump = () => beep(90, 0.15, 'sawtooth', 0.18);
   const sndRumble = () => beep(85, 0.05, 'triangle', 0.05);
+  const sndCheer = () => { beep(620, 0.09, 'triangle', 0.14); beep(830, 0.09, 'triangle', 0.14, 0.07); beep(1040, 0.12, 'triangle', 0.14, 0.14); };
+  const sndCount = () => beep(440, 0.15, 'square', 0.12);
+  const sndGo = () => beep(880, 0.35, 'square', 0.14);
+  const sndFinish = () => { beep(520, 0.15, 'triangle', 0.15); beep(660, 0.25, 'triangle', 0.15, 0.15); };
+  const sndWin = () => { [523, 659, 784, 1047].forEach((f, i) => beep(f, 0.22, 'triangle', 0.16, i * 0.15)); };
 
   // ---- Girdi ----
   const keys = {};
@@ -239,19 +298,30 @@
   });
 
   // ---- Güncelleme ----
+  let lastCountInt = 4;
   function update(dt) {
     if (state !== STATE.PLAYING || paused) return;
+
+    // Geri sayım: herkes start çizgisinde bekler
+    if (countT > 0) {
+      countT -= dt;
+      const ci = Math.ceil(countT);
+      if (ci < lastCountInt && ci > 0) { sndCount(); lastCountInt = ci; }
+      if (countT <= 0) sndGo();
+      return;
+    }
+
     elapsed += dt;
 
-    // Hız: zamanla artan tavana doğru kendiliğinden hızlanır
-    const maxSpeed = Math.min(26, 13 + elapsed * 0.12);
-    speed += (maxSpeed - speed) * dt * 0.35;
+    // Oyuncu hızı: zamanla artan tavana doğru (temiz sürüşte rakiplerden hızlı)
+    const maxSpeed = Math.min(27, 17 + elapsed * 0.35);
+    speed += (maxSpeed - speed) * dt * 0.4;
 
-    // Viraj bölümleri
+    // Viraj bölümleri (dar sokak dönemeçleri)
     if (distance > sectionEnd) {
-      curveTarget = (Math.random() * 2 - 1) * 1.1;
-      if (Math.random() < 0.3) curveTarget = 0; // ara sıra düzlük
-      sectionEnd = distance + 30 + Math.random() * 45;
+      curveTarget = (Math.random() * 2 - 1) * 0.9;
+      if (Math.random() < 0.35) curveTarget = 0;
+      sectionEnd = distance + 25 + Math.random() * 40;
     }
     curveCur += (curveTarget - curveCur) * dt * 0.9;
 
@@ -260,14 +330,13 @@
     if (keys['ArrowLeft'] || keys['a'] || keys['A']) steer = -1;
     else if (keys['ArrowRight'] || keys['d'] || keys['D']) steer = 1;
     playerX += steer * dt * 2.0;
-    // Viraj merkezkaç: viraja karşı direksiyon kırmak gerekir
-    playerX += curveCur * speed * 0.011 * dt;
-    playerX = Math.max(-1.4, Math.min(1.4, playerX));
+    playerX += curveCur * speed * 0.011 * dt;   // merkezkaç
+    playerX = Math.max(-1.25, Math.min(1.25, playerX));
 
-    // Yol dışı: yavaşlar ve sarsılır
+    // Kaldırıma çıkma: seyircilerin arasında yavaşlarsın
     const offroad = Math.abs(playerX) > 1;
     if (offroad) {
-      speed = Math.max(4, speed * (1 - 1.3 * dt));
+      speed = Math.max(5, speed * (1 - 1.4 * dt));
       shake = 3;
       rumbleAcc += dt;
       if (rumbleAcc > 0.13) { rumbleAcc = 0; sndRumble(); }
@@ -277,90 +346,73 @@
 
     distance += speed * dt;
 
-    // Engel üret: zamanla sıklaşır
-    while (nextObstZ < distance + 45) {
-      const types = ['kaya', 'koni', 'kutuk'];
-      obstacles.push({
-        z: nextObstZ,
-        x: (Math.random() * 1.5 - 0.75),
-        type: types[Math.floor(Math.random() * types.length)],
-      });
-      nextObstZ += Math.max(9, 20 - elapsed * 0.12) + Math.random() * 14;
-    }
-    // Yol kenarı ağaçları
-    while (nextTreeZ < distance + 45) {
-      trees.push({ z: nextTreeZ, x: (Math.random() < 0.5 ? -1 : 1) * (1.25 + Math.random() * 0.5) });
-      nextTreeZ += 4 + Math.random() * 4;
-    }
+    // Rakipler
+    if (bumpT > 0) bumpT -= dt;
+    for (const r of rivals) {
+      r.wob += dt;
+      const wobble = Math.sin(r.wob * 0.7) * 1.3;
+      r.s += (r.target + wobble - r.s) * dt * 0.35;
+      r.z += r.s * dt;
+      // hafif şerit değiştirme
+      r.x = Math.max(-0.85, Math.min(0.85, r.x + Math.sin(r.wob * 0.35) * 0.002));
 
-    // Çarpışma ve temizlik
-    if (invTimer > 0) invTimer -= dt;
-    if (flashTimer > 0) flashTimer -= dt;
-    for (let i = obstacles.length - 1; i >= 0; i--) {
-      const ob = obstacles[i];
-      const zRel = ob.z - distance + 1;
-      if (zRel < 0.6) { obstacles.splice(i, 1); continue; }
-      if (invTimer <= 0 && zRel < 1.25 && Math.abs(ob.x - playerX) < 0.27) {
-        obstacles.splice(i, 1);
-        lives--;
-        invTimer = 2;
-        flashTimer = 0.4;
-        speed = Math.max(5, speed * 0.35);
-        sndCrash();
-        if (lives <= 0) { gameOver(); return; }
+      // Geçiş tezahüratı
+      if (!r.passed && r.z < distance) { r.passed = true; sndCheer(); }
+      else if (r.passed && r.z > distance + 0.5) { r.passed = false; }
+
+      // Çarpışmasız yarış ama sıkışırsan yavaşlarsın (nazik temas)
+      const zRel = r.z - distance + 1;
+      if (bumpT <= 0 && zRel > 0.88 && zRel < 1.18 && Math.abs(r.x - playerX) < 0.24) {
+        speed = Math.max(5, Math.min(speed, r.s * 0.8));
+        playerX += (playerX >= r.x ? 1 : -1) * 0.2;
+        bumpT = 0.7;
+        shake = 3;
+        sndBump();
       }
     }
-    for (let i = trees.length - 1; i >= 0; i--) {
-      if (trees[i].z - distance + 1 < 0.6) trees.splice(i, 1);
-    }
+
+    // Sahne üretimi
+    while (nextBldZ < distance + 50) spawnBuildings();
+    while (nextCrowdZ < distance + 50) spawnCrowd();
+    buildings = buildings.filter(b => b.z - distance + 1 > 0.5);
+    crowds = crowds.filter(c => c.z - distance + 1 > 0.5);
+
+    // Bitiş
+    if (distance >= RACE_UNITS) finishRace();
   }
 
-  // ---- Çizim yardımcıları ----
-  // f: 0=ufuk, 1=en yakın satır
+  // ---- Çizim ----
   const rowCenter = f => W / 2 - playerX * ROADHALF * f + curveCur * (1 - f) * (1 - f) * BEND;
-
-  function drawHeart(x, y, r) {
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.fillStyle = '#ff5d8f';
-    ctx.beginPath();
-    ctx.moveTo(0, r * 0.9);
-    ctx.bezierCurveTo(-r * 1.4, -r * 0.2, -r * 0.6, -r * 1.1, 0, -r * 0.3);
-    ctx.bezierCurveTo(r * 0.6, -r * 1.1, r * 1.4, -r * 0.2, 0, r * 0.9);
-    ctx.fill();
-    ctx.restore();
-  }
 
   function drawSky() {
     const g = ctx.createLinearGradient(0, 0, 0, HORIZON);
     g.addColorStop(0, '#4aa8e8');
-    g.addColorStop(1, '#bfe3f7');
+    g.addColorStop(1, '#cfe8f7');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, HORIZON);
     // güneş
     ctx.beginPath();
-    ctx.arc(W * 0.78, 70, 34, 0, Math.PI * 2);
+    ctx.arc(W * 0.76, 66, 30, 0, Math.PI * 2);
     ctx.fillStyle = '#ffe89a';
     ctx.fill();
-    // dağlar: virajla hafifçe kayar
-    const mOff = -curveCur * 70;
-    ctx.fillStyle = '#7fa8c9';
-    for (const [mx, mw, mh] of [[-60, 260, 90], [140, 300, 120], [340, 240, 80]]) {
-      ctx.beginPath();
-      ctx.moveTo(mOff + mx, HORIZON);
-      ctx.lineTo(mOff + mx + mw / 2, HORIZON - mh);
-      ctx.lineTo(mOff + mx + mw, HORIZON);
-      ctx.closePath();
-      ctx.fill();
+    // uzak şehir silueti: virajla hafif kayar
+    const mOff = -curveCur * 60;
+    ctx.fillStyle = '#8aa8c4';
+    for (const [bx, bw, bh] of [[-40, 70, 70], [50, 55, 110], [120, 80, 60], [220, 60, 130], [300, 75, 85], [390, 65, 105], [460, 70, 65]]) {
+      ctx.fillRect(mOff + bx, HORIZON - bh, bw, bh);
+    }
+    ctx.fillStyle = '#7b9ab8';
+    for (const [bx, bw, bh] of [[10, 50, 45], [160, 55, 80], [350, 50, 55]]) {
+      ctx.fillRect(mOff + bx, HORIZON - bh, bw, bh);
     }
     // bulutlar
     ctx.fillStyle = 'rgba(255,255,255,0.85)';
     const t = performance.now() / 1000;
-    for (const [bx, by, br] of [[80, 60, 22], [230, 100, 18], [390, 50, 24]]) {
-      const x = (bx + t * 6) % (W + 80) - 40;
+    for (const [bx, by, br] of [[80, 50, 20], [250, 90, 16], [400, 45, 22]]) {
+      const x = (bx + t * 5) % (W + 80) - 40;
       ctx.beginPath();
-      ctx.ellipse(x, by, br * 1.6, br * 0.75, 0, 0, Math.PI * 2);
-      ctx.ellipse(x + br, by + 4, br * 1.1, br * 0.6, 0, 0, Math.PI * 2);
+      ctx.ellipse(x, by, br * 1.6, br * 0.7, 0, 0, Math.PI * 2);
+      ctx.ellipse(x + br, by + 4, br * 1.1, br * 0.55, 0, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -370,19 +422,19 @@
       const f = (sy - HORIZON) / (H - HORIZON);
       const z = distance + 1 / Math.max(f, 0.02);
       const band = Math.floor(z * 1.4) % 2;
-      // çimen
-      ctx.fillStyle = band ? '#3fa054' : '#37904b';
+      // kaldırım (arka plan şeridi)
+      ctx.fillStyle = band ? '#9aa0a8' : '#8f959d';
       ctx.fillRect(0, sy, W, 1);
-      // yol
+      // asfalt
       const c = rowCenter(f);
       const half = ROADHALF * f;
-      ctx.fillStyle = band ? '#5c6068' : '#565a62';
+      ctx.fillStyle = band ? '#565a62' : '#50545c';
       ctx.fillRect(c - half, sy, half * 2, 1);
       if (f > 0.05) {
-        // kenar şeritleri (kırmızı-beyaz)
+        // yol kenarı bariyer şeridi (kırmızı-beyaz)
         ctx.fillStyle = band ? '#e8e8e8' : '#d64545';
-        ctx.fillRect(c - half, sy, half * 0.07, 1);
-        ctx.fillRect(c + half * 0.93, sy, half * 0.07, 1);
+        ctx.fillRect(c - half, sy, half * 0.06, 1);
+        ctx.fillRect(c + half * 0.94, sy, half * 0.06, 1);
         // orta kesik çizgi
         if (band === 0) {
           ctx.fillStyle = '#e8e8e8';
@@ -392,72 +444,124 @@
     }
   }
 
-  function drawSprites() {
-    // uzaktan yakına sırala (uzak önce çizilir)
-    const all = [
-      ...trees.map(t => ({ ...t, kind: 'tree' })),
-      ...obstacles.map(o => ({ ...o, kind: 'obst' })),
-    ].sort((a, b) => b.z - a.z);
+  function drawRival(r, x, y, sc, t) {
+    const bob = Math.sin(t * 7 + r.wob * 3) * 2 * sc;
+    // arka tekerlek
+    ctx.fillStyle = '#1c1f24';
+    ctx.beginPath();
+    ctx.ellipse(x, y - 10 * sc + bob, 8 * sc, 15 * sc, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // gövde (forma)
+    ctx.fillStyle = r.jersey;
+    ctx.beginPath();
+    ctx.ellipse(x, y - 33 * sc + bob, 13 * sc, 17 * sc, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // kollar
+    ctx.strokeStyle = r.jersey;
+    ctx.lineWidth = 6 * sc;
+    ctx.beginPath();
+    ctx.moveTo(x - 10 * sc, y - 42 * sc + bob); ctx.lineTo(x - 16 * sc, y - 26 * sc + bob);
+    ctx.moveTo(x + 10 * sc, y - 42 * sc + bob); ctx.lineTo(x + 16 * sc, y - 26 * sc + bob);
+    ctx.stroke();
+    // kafa + kask
+    ctx.beginPath();
+    ctx.arc(x, y - 56 * sc + bob, 9 * sc, 0, Math.PI * 2);
+    ctx.fillStyle = '#e8b88a';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x, y - 58 * sc + bob, 9.5 * sc, Math.PI, 0);
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+  }
 
-    for (const s of all) {
+  function drawSprites() {
+    const t = performance.now() / 1000;
+    const sprites = [
+      ...buildings.map(b => ({ ...b, kind: 'bld' })),
+      ...crowds.map(c => ({ ...c, kind: 'crowd' })),
+      ...rivals.map(r => ({ z: r.z, x: r.x, kind: 'rival', r })),
+    ];
+    // bitiş takı
+    if (RACE_UNITS - distance + 1 > 0.6) sprites.push({ z: RACE_UNITS, x: 0, kind: 'finish' });
+    sprites.sort((a, b) => b.z - a.z);
+
+    for (const s of sprites) {
       const zRel = s.z - distance + 1;
       if (zRel < 0.6) continue;
       const f = 1 / zRel;
-      if (f > 1 || f < 0.03) continue;
-      const y = HORIZON + f * (H - HORIZON);
-      const x = rowCenter(f) + s.x * ROADHALF * f;
-      const sc = f;
+      if (f > 1.05 || f < 0.03) continue;
+      const fc = Math.min(f, 1);
+      const y = HORIZON + fc * (H - HORIZON);
+      const x = rowCenter(fc) + s.x * ROADHALF * fc;
+      const sc = fc;
 
-      if (s.kind === 'tree') {
-        // gövde
-        ctx.fillStyle = '#7a4d1e';
-        ctx.fillRect(x - 5 * sc, y - 46 * sc, 10 * sc, 46 * sc);
-        // taç
-        ctx.beginPath();
-        ctx.arc(x, y - 58 * sc, 26 * sc, 0, Math.PI * 2);
-        ctx.fillStyle = '#2f8f43';
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(x - 12 * sc, y - 48 * sc, 16 * sc, 0, Math.PI * 2);
-        ctx.arc(x + 12 * sc, y - 48 * sc, 16 * sc, 0, Math.PI * 2);
-        ctx.fillStyle = '#37a04e';
-        ctx.fill();
-      } else if (s.type === 'koni') {
-        ctx.beginPath();
-        ctx.moveTo(x, y - 34 * sc);
-        ctx.lineTo(x + 14 * sc, y);
-        ctx.lineTo(x - 14 * sc, y);
-        ctx.closePath();
-        ctx.fillStyle = '#f07020';
-        ctx.fill();
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(x - 8 * sc, y - 18 * sc, 16 * sc, 6 * sc);
-        ctx.fillStyle = '#c85510';
-        ctx.fillRect(x - 18 * sc, y - 3 * sc, 36 * sc, 4 * sc);
-      } else if (s.type === 'kaya') {
-        ctx.beginPath();
-        ctx.ellipse(x, y - 10 * sc, 20 * sc, 14 * sc, 0, 0, Math.PI * 2);
-        ctx.fillStyle = '#8a8f98';
-        ctx.fill();
-        ctx.beginPath();
-        ctx.ellipse(x - 6 * sc, y - 16 * sc, 8 * sc, 5 * sc, -0.4, 0, Math.PI * 2);
-        ctx.fillStyle = '#a7adb8';
-        ctx.fill();
-      } else { // kütük
-        ctx.fillStyle = '#8d5a2b';
-        ctx.fillRect(x - 26 * sc, y - 16 * sc, 52 * sc, 14 * sc);
-        ctx.beginPath();
-        ctx.ellipse(x + 26 * sc, y - 9 * sc, 5 * sc, 7 * sc, 0, 0, Math.PI * 2);
-        ctx.fillStyle = '#c99a5e';
-        ctx.fill();
-        ctx.strokeStyle = '#6b3f16';
-        ctx.lineWidth = Math.max(1, 2 * sc);
-        for (let i = 1; i < 4; i++) {
-          ctx.beginPath();
-          ctx.moveTo(x - 26 * sc + i * 13 * sc, y - 16 * sc);
-          ctx.lineTo(x - 26 * sc + i * 13 * sc, y - 2 * sc);
-          ctx.stroke();
+      if (s.kind === 'bld') {
+        const bw = s.w * sc, bh = s.h * sc;
+        ctx.fillStyle = s.color;
+        ctx.fillRect(x - bw / 2, y - bh, bw, bh);
+        ctx.fillStyle = 'rgba(0,0,0,0.18)';
+        ctx.fillRect(x - bw / 2, y - bh, bw * 0.18, bh);
+        // pencereler
+        if (sc > 0.14) {
+          ctx.fillStyle = 'rgba(40, 60, 90, 0.7)';
+          const rows = Math.max(2, Math.floor(s.h / 46));
+          for (let ri = 0; ri < rows; ri++) {
+            for (let ciX = 0; ciX < 3; ciX++) {
+              ctx.fillRect(
+                x - bw / 2 + bw * (0.16 + ciX * 0.28),
+                y - bh + bh * (0.1 + ri * (0.82 / rows)),
+                bw * 0.16, bh * 0.32 / rows
+              );
+            }
+          }
         }
+      } else if (s.kind === 'crowd') {
+        if (sc < 0.1) continue;
+        for (let i = 0; i < s.n; i++) {
+          const px = x + (i - s.n / 2) * 13 * sc;
+          const col = SHIRTS[Math.floor((s.seed + i * 7) % SHIRTS.length)];
+          const wave = Math.sin(t * 7 + s.seed + i * 1.7);
+          // gövde
+          ctx.fillStyle = col;
+          ctx.fillRect(px - 4.5 * sc, y - 24 * sc, 9 * sc, 16 * sc);
+          // kafa
+          ctx.beginPath();
+          ctx.arc(px, y - 29 * sc, 5 * sc, 0, Math.PI * 2);
+          ctx.fillStyle = '#e8b88a';
+          ctx.fill();
+          // sallanan kol (tezahürat)
+          if (wave > 0) {
+            ctx.strokeStyle = col;
+            ctx.lineWidth = 3 * sc;
+            ctx.beginPath();
+            ctx.moveTo(px + 4 * sc, y - 21 * sc);
+            ctx.lineTo(px + 9 * sc, y - 33 * sc - wave * 3 * sc);
+            ctx.stroke();
+          }
+        }
+      } else if (s.kind === 'finish') {
+        const half = ROADHALF * fc;
+        const ph = 90 * sc;
+        // direkler
+        ctx.fillStyle = '#39424e';
+        ctx.fillRect(x - half - 6 * sc, y - ph, 8 * sc, ph);
+        ctx.fillRect(x + half - 2 * sc, y - ph, 8 * sc, ph);
+        // damalı pankart
+        const bh2 = 26 * sc;
+        for (let i = 0; i < 10; i++) {
+          for (let j = 0; j < 2; j++) {
+            ctx.fillStyle = (i + j) % 2 ? '#111' : '#fff';
+            ctx.fillRect(x - half + (i * half * 2) / 10, y - ph + j * bh2 / 2, (half * 2) / 10, bh2 / 2);
+          }
+        }
+        if (sc > 0.2) {
+          ctx.fillStyle = '#ffd54a';
+          ctx.font = 'bold ' + 16 * sc + 'px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('BİTİŞ', x, y - ph + bh2 + 16 * sc);
+        }
+      } else if (s.kind === 'rival') {
+        drawRival(s.r, x, y, sc, t);
       }
     }
   }
@@ -470,10 +574,8 @@
     ctx.save();
     ctx.translate(W / 2 + sx, H + sy);
     ctx.rotate(steer * 0.05);
-    // yanıp sönme: çarpışma sonrası dokunulmazlık
-    if (invTimer > 0 && Math.floor(invTimer * 8) % 2 === 0) ctx.globalAlpha = 0.45;
 
-    // ön tekerlek (gidonun altında ince görünür)
+    // ön tekerlek
     ctx.fillStyle = '#222';
     ctx.beginPath();
     ctx.ellipse(0, -18, 12, 46, 0, 0, Math.PI * 2);
@@ -504,32 +606,46 @@
     ctx.lineWidth = 5;
     ctx.beginPath(); ctx.moveTo(-118, -76); ctx.lineTo(-88, -88); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(118, -76); ctx.lineTo(88, -88); ctx.stroke();
+    // numara plakası
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(-26, -60, 52, 32);
+    ctx.strokeStyle = '#d64545';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(-26, -60, 52, 32);
+    ctx.fillStyle = '#222';
+    ctx.font = 'bold 22px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('1', 0, -43);
     // zil
     ctx.beginPath();
     ctx.arc(-52, -84, 8, 0, Math.PI * 2);
     ctx.fillStyle = '#ffd54a';
     ctx.fill();
 
-    ctx.globalAlpha = 1;
     ctx.restore();
   }
 
   function drawHUD() {
-    // hız ve mesafe
     ctx.fillStyle = 'rgba(10, 25, 45, 0.55)';
     ctx.fillRect(0, 0, W, 58);
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#fff';
+    // sıralama
+    const rk = state === STATE.OVER ? finalRank : rank();
+    ctx.fillStyle = rk === 1 ? '#ffd54a' : '#fff';
     ctx.font = 'bold 24px sans-serif';
-    ctx.fillText(Math.floor(distance * 2) + ' m', 118, 22);
+    ctx.fillText('Sıra: ' + rk + '/' + (RIVAL_COUNT + 1), 118, 22);
     ctx.fillStyle = '#8fd3ff';
     ctx.font = '15px sans-serif';
-    ctx.fillText('Hız: ' + Math.floor(speed * 3) + ' km/s   Rekor: ' + best + ' m', 118, 45);
-    // canlar
-    for (let i = 0; i < lives; i++) {
-      drawHeart(W - 82 - i * 30, 26, 12);
-    }
+    const kalan = Math.max(0, Math.ceil((RACE_UNITS - distance) * 2));
+    ctx.fillText('Kalan: ' + kalan + ' m   Hız: ' + Math.floor(speed * 2) + ' km/s', 118, 45);
+    // ilerleme çubuğu
+    const pw = W - 236;
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    ctx.fillRect(118, 54, pw, 3);
+    ctx.fillStyle = '#ffd54a';
+    ctx.fillRect(118, 54, pw * Math.min(1, distance / RACE_UNITS), 3);
   }
 
   function drawCenteredPanel(lines) {
@@ -537,7 +653,7 @@
     ctx.fillRect(0, 0, W, H);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
-    let y = H * 0.30;
+    let y = H * 0.28;
     for (const [text, size, color] of lines) {
       ctx.fillStyle = color;
       ctx.font = 'bold ' + size + 'px sans-serif';
@@ -545,6 +661,8 @@
       y += size * 1.6;
     }
   }
+
+  const rankText = r => r === 1 ? 'BİRİNCİ OLDUN!' : r + '. OLDUN';
 
   // ---- Ana döngü ----
   let last = performance.now();
@@ -559,20 +677,32 @@
     drawHandlebar();
     if (state !== STATE.MENU) drawHUD();
 
-    // çarpışma kırmızı flaşı
-    if (flashTimer > 0) {
-      ctx.fillStyle = 'rgba(255, 40, 20, ' + (flashTimer * 0.8) + ')';
+    // geri sayım
+    if (state === STATE.PLAYING && !paused && countT > 0) {
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'rgba(8, 20, 38, 0.4)';
       ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#ffd54a';
+      ctx.font = 'bold 120px sans-serif';
+      ctx.fillText(String(Math.max(1, Math.ceil(countT))), W / 2, H * 0.42);
+    } else if (state === STATE.PLAYING && !paused && elapsed < 1.2) {
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#7fff9e';
+      ctx.font = 'bold 90px sans-serif';
+      ctx.fillText('BAŞLA!', W / 2, H * 0.42);
     }
 
     if (state === STATE.MENU) {
       drawCenteredPanel([
-        ['BİSİKLET OYUNU', 42, '#8fd3ff'],
-        ['', 16, '#fff'],
-        ['Bisikletçinin gözünden yol!', 20, '#ddd'],
-        ['Yolda kal, engellere çarpma', 16, '#aaa'],
+        ['BİSİKLET YARIŞI', 42, '#8fd3ff'],
+        ['', 14, '#fff'],
+        ['Şehrin dar sokaklarında yarış!', 20, '#ddd'],
+        ['9 rakibi geç, birinci olmaya çalış', 16, '#aaa'],
+        ['Seyirciler seni izliyor, kaldırıma çıkma!', 16, '#aaa'],
         ['Ok tuşları / A-D veya ekran okları', 16, '#aaa'],
-        ['Yoldan çıkarsan yavaşlarsın!', 16, '#ffb020'],
+        ['Yarış: 2000 m', 16, '#ffb020'],
         ['Başlamak için tıkla veya SPACE', 20, '#ffd54a'],
       ]);
     } else if (paused && state === STATE.PLAYING) {
@@ -582,13 +712,12 @@
         ['Devam etmek için Ayarlar > Başlat', 18, '#ddd'],
       ]);
     } else if (state === STATE.OVER) {
-      const m = Math.floor(distance * 2);
       drawCenteredPanel([
-        ['OYUN BİTTİ', 44, '#ff6b6b'],
-        ['Mesafe: ' + m + ' m', 30, '#8fd3ff'],
-        [m >= best && m > 0 ? '★ YENİ REKOR! ★' : 'Rekor: ' + best + ' m', 24, '#ffd54a'],
+        ['YARIŞ BİTTİ', 44, '#8fd3ff'],
+        [rankText(finalRank), 36, finalRank === 1 ? '#ffd54a' : '#fff'],
+        [finalRank === 1 ? '★ Şehrin şampiyonu! ★' : 'En iyi derecen: ' + (bestRank || '-') + '.', 20, '#7fff9e'],
         ['', 10, '#fff'],
-        ['Tekrar sürmek için tıkla veya SPACE', 20, '#ddd'],
+        ['Tekrar yarışmak için tıkla veya SPACE', 20, '#ddd'],
       ]);
     }
 
