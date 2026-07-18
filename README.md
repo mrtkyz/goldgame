@@ -3,6 +3,9 @@
 Tarayıcıda çalışan, tek dosyalık (`index.html`) HTML5 canvas oyunu. Keseyi hareket
 ettirip altınları topla, bombalardan kaç!
 
+**Canlı adres:** http://goldgame.sinsoft.com.tr/ (Turhost DNS'te A kaydı ile
+droplet IP'sine yönlendirilmiştir.)
+
 ## Yerelde Docker ile çalıştırma
 
 ```bash
@@ -44,13 +47,20 @@ yolundan şu secret'ları ekleyin:
 
 | Secret               | Değer                                             | Zorunlu |
 |----------------------|---------------------------------------------------|---------|
-| `DO_HOST`            | Droplet'in IP adresi                              | Evet    |
+| `DO_HOST`            | Droplet'in IP adresi (SSH için IP önerilir)       | Evet    |
 | `DO_USER`            | `deploy`                                          | Evet    |
 | `DO_SSH_PRIVATE_KEY` | `goldgame_deploy` dosyasının **tüm içeriği**      | Evet    |
 | `DO_PORT`            | SSH portu (varsayılan: `22`)                      | Hayır   |
 | `DO_TARGET_DIR`      | Hedef dizin (varsayılan: `/opt/goldgame`)         | Hayır   |
 
-Hepsi bu kadar. Artık `main`'e her push'ta oyun `http://<droplet-ip>/`
-adresinde otomatik güncellenir. Deploy'u elle tetiklemek isterseniz GitHub'da
-**Actions → DigitalOcean Droplet'e Deploy (Docker) → Run workflow**
-kullanabilirsiniz.
+Hepsi bu kadar. Artık `main` veya `claude/gold-game-index-page-h80dgz` dalına
+her push'ta oyun **http://goldgame.sinsoft.com.tr/** adresinde otomatik
+güncellenir (doğrudan `http://<droplet-ip>/` de çalışır). Deploy'u elle
+tetiklemek isterseniz GitHub'da **Actions → DigitalOcean Droplet'e Deploy
+(Docker) → Run workflow** kullanabilirsiniz.
+
+### HTTPS (isteğe bağlı sonraki adım)
+
+Şu an site HTTP üzerinden yayında. Domain hazır olduğu için Let's Encrypt ile
+ücretsiz SSL eklenebilir; bunun için compose'a bir certbot/Caddy katmanı
+eklemek gerekir. İhtiyaç olursa bu ayrı bir değişiklik olarak yapılabilir.
