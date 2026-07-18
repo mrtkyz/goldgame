@@ -1,4 +1,4 @@
-# Talha'nın Altın Oyunu 🪙
+# Gold Game 🪙
 
 Tarayıcıda çalışan, tek dosyalık (`index.html`) HTML5 canvas oyunu. Keseyi hareket
 ettirip altınları topla, bombalardan kaç!
