@@ -4,4 +4,13 @@ services:
     container_name: goldgame
     ports:
       - "80:80"
+      - "443:443"
     restart: unless-stopped
+    volumes:
+      # Let's Encrypt sertifikaları yeniden deploy'da kaybolmasın
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

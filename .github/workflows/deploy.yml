@@ -46,8 +46,16 @@ jobs:
              && docker compose up -d --build \
              && docker image prune -f"
 
-      - name: Deploy sonucunu doğrula
+      - name: Deploy sonucunu doğrula (HTTPS)
         run: |
-          ssh -i ~/.ssh/deploy_key -p "${{ secrets.DO_PORT || '22' }}" \
-            "${{ secrets.DO_USER }}@${{ secrets.DO_HOST }}" \
-            "curl -fsS http://localhost/ > /dev/null && echo 'Deploy basarili: site yanit veriyor'"
+          # İlk deploy'da Let's Encrypt sertifikasının alınması birkaç saniye sürebilir
+          for i in $(seq 1 12); do
+            if curl -fsS -m 10 https://goldgame.sinsoft.com.tr/ > /dev/null; then
+              echo "Deploy basarili: site HTTPS uzerinden yanit veriyor"
+              exit 0
+            fi
+            echo "Deneme $i/12 basarisiz, 5 sn sonra tekrar..."
+            sleep 5
+          done
+          echo "HTTPS dogrulanamadi (443 portu acik mi? DNS dogru mu?)"
+          exit 1

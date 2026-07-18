@@ -30,6 +30,12 @@ if systemctl is-active --quiet nginx 2>/dev/null; then
   systemctl disable --now nginx
 fi
 
+echo "==> Güvenlik duvarı kontrol ediliyor (80 ve 443 açık olmalı)"
+if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
+  ufw allow 80/tcp
+  ufw allow 443/tcp
+fi
+
 echo "==> Uygulama dizini oluşturuluyor: ${SITE_DIR}"
 mkdir -p "${SITE_DIR}"
 

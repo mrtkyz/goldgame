@@ -3,8 +3,9 @@
 Tarayıcıda çalışan, tek dosyalık (`index.html`) HTML5 canvas oyunu. Keseyi hareket
 ettirip altınları topla, bombalardan kaç!
 
-**Canlı adres:** http://goldgame.sinsoft.com.tr/ (Turhost DNS'te A kaydı ile
-droplet IP'sine yönlendirilmiştir.)
+**Canlı adres:** https://goldgame.sinsoft.com.tr/ (Turhost DNS'te A kaydı ile
+droplet IP'sine yönlendirilmiştir; SSL sertifikası Caddy + Let's Encrypt ile
+otomatik alınır ve yenilenir.)
 
 ## Yerelde Docker ile çalıştırma
 
@@ -17,8 +18,9 @@ docker compose up -d --build
 
 `main` dalına yapılan her push, GitHub Actions ile droplet'e otomatik deploy
 edilir (`.github/workflows/deploy.yml`): dosyalar `rsync` ile sunucuya kopyalanır,
-ardından sunucuda `docker compose up -d --build` çalıştırılarak nginx tabanlı
-container güncellenir. Kurulum iki adımdan oluşur:
+ardından sunucuda `docker compose up -d --build` çalıştırılarak Caddy tabanlı
+container güncellenir. Caddy, Let's Encrypt sertifikasını otomatik alır,
+yeniler ve HTTP isteklerini HTTPS'e yönlendirir. Kurulum iki adımdan oluşur:
 
 ### 1. Sunucuyu hazırla (bir kereye mahsus)
 
@@ -54,13 +56,8 @@ yolundan şu secret'ları ekleyin:
 | `DO_TARGET_DIR`      | Hedef dizin (varsayılan: `/opt/goldgame`)         | Hayır   |
 
 Hepsi bu kadar. Artık `main` veya `claude/gold-game-index-page-h80dgz` dalına
-her push'ta oyun **http://goldgame.sinsoft.com.tr/** adresinde otomatik
-güncellenir (doğrudan `http://<droplet-ip>/` de çalışır). Deploy'u elle
+her push'ta oyun **https://goldgame.sinsoft.com.tr/** adresinde otomatik
+güncellenir. Deploy'u elle
 tetiklemek isterseniz GitHub'da **Actions → DigitalOcean Droplet'e Deploy
 (Docker) → Run workflow** kullanabilirsiniz.
 
-### HTTPS (isteğe bağlı sonraki adım)
-
-Şu an site HTTP üzerinden yayında. Domain hazır olduğu için Let's Encrypt ile
-ücretsiz SSL eklenebilir; bunun için compose'a bir certbot/Caddy katmanı
-eklemek gerekir. İhtiyaç olursa bu ayrı bir değişiklik olarak yapılabilir.
