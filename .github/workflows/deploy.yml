@@ -1,0 +1,40 @@
+name: DigitalOcean Droplet'e Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Kodu indir
+        uses: actions/checkout@v4
+
+      - name: SSH anahtarını hazırla
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DO_SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.DO_PORT || '22' }}" -H "${{ secrets.DO_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Dosyaları sunucuya kopyala
+        run: |
+          rsync -avz --delete \
+            -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.DO_PORT || '22' }}" \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude 'deploy' \
+            --exclude 'README.md' \
+            ./ "${{ secrets.DO_USER }}@${{ secrets.DO_HOST }}:${{ secrets.DO_TARGET_DIR || '/var/www/goldgame' }}/"
+
+      - name: Deploy sonucunu doğrula
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.DO_PORT || '22' }}" \
+            "${{ secrets.DO_USER }}@${{ secrets.DO_HOST }}" \
+            "test -f '${{ secrets.DO_TARGET_DIR || '/var/www/goldgame' }}/index.html' && echo 'Deploy basarili: index.html sunucuda mevcut'"
