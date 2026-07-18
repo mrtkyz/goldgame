@@ -181,9 +181,9 @@
     for (const side of [-1, 1]) {
       buildings.push({
         z: nextBldZ + Math.random() * 1.2,
-        x: side * (1.5 + Math.random() * 0.2),
-        h: 420 + Math.random() * 260,
-        w: 240 + Math.random() * 110,
+        x: side * (1.45 + Math.random() * 0.15),
+        h: 700 + Math.random() * 400,
+        w: 380 + Math.random() * 140,
         color: BLD_COLORS[Math.floor(Math.random() * BLD_COLORS.length)],
       });
     }
@@ -317,20 +317,11 @@
     const maxSpeed = Math.min(27, 17 + elapsed * 0.35);
     speed += (maxSpeed - speed) * dt * 0.4;
 
-    // Viraj bölümleri (dar sokak dönemeçleri)
-    if (distance > sectionEnd) {
-      curveTarget = (Math.random() * 2 - 1) * 0.9;
-      if (Math.random() < 0.35) curveTarget = 0;
-      sectionEnd = distance + 25 + Math.random() * 40;
-    }
-    curveCur += (curveTarget - curveCur) * dt * 0.9;
-
-    // Direksiyon
+    // Direksiyon (yol dümdüz, viraj yok)
     let steer = steerTouch;
     if (keys['ArrowLeft'] || keys['a'] || keys['A']) steer = -1;
     else if (keys['ArrowRight'] || keys['d'] || keys['D']) steer = 1;
     playerX += steer * dt * 2.0;
-    playerX += curveCur * speed * 0.011 * dt;   // merkezkaç
     playerX = Math.max(-1.25, Math.min(1.25, playerX));
 
     // Kaldırıma çıkma: seyircilerin arasında yavaşlarsın
@@ -445,36 +436,39 @@
   }
 
   function drawRival(r, x, y, sc, t) {
-    const bob = Math.sin(t * 7 + r.wob * 3) * 3 * sc;
+    const bob = Math.sin(t * 7 + r.wob * 3) * 5 * sc;
     // arka tekerlek
     ctx.fillStyle = '#1c1f24';
     ctx.beginPath();
-    ctx.ellipse(x, y - 14 * sc + bob, 11 * sc, 21 * sc, 0, 0, Math.PI * 2);
+    ctx.ellipse(x, y - 25 * sc + bob, 20 * sc, 38 * sc, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = '#4a4f58';
     ctx.beginPath();
-    ctx.ellipse(x, y - 14 * sc + bob, 5 * sc, 15 * sc, 0, 0, Math.PI * 2);
+    ctx.ellipse(x, y - 25 * sc + bob, 9 * sc, 27 * sc, 0, 0, Math.PI * 2);
     ctx.fill();
+    // sele borusu
+    ctx.fillStyle = '#2e3640';
+    ctx.fillRect(x - 4 * sc, y - 70 * sc + bob, 8 * sc, 30 * sc);
     // gövde (forma)
     ctx.fillStyle = r.jersey;
     ctx.beginPath();
-    ctx.ellipse(x, y - 46 * sc + bob, 18 * sc, 24 * sc, 0, 0, Math.PI * 2);
+    ctx.ellipse(x, y - 84 * sc + bob, 32 * sc, 43 * sc, 0, 0, Math.PI * 2);
     ctx.fill();
     // kollar
     ctx.strokeStyle = r.jersey;
-    ctx.lineWidth = 8 * sc;
+    ctx.lineWidth = 14 * sc;
     ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.moveTo(x - 14 * sc, y - 59 * sc + bob); ctx.lineTo(x - 22 * sc, y - 36 * sc + bob);
-    ctx.moveTo(x + 14 * sc, y - 59 * sc + bob); ctx.lineTo(x + 22 * sc, y - 36 * sc + bob);
+    ctx.moveTo(x - 25 * sc, y - 106 * sc + bob); ctx.lineTo(x - 40 * sc, y - 64 * sc + bob);
+    ctx.moveTo(x + 25 * sc, y - 106 * sc + bob); ctx.lineTo(x + 40 * sc, y - 64 * sc + bob);
     ctx.stroke();
     // kafa + kask
     ctx.beginPath();
-    ctx.arc(x, y - 78 * sc + bob, 12 * sc, 0, Math.PI * 2);
+    ctx.arc(x, y - 140 * sc + bob, 21 * sc, 0, Math.PI * 2);
     ctx.fillStyle = '#e8b88a';
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(x, y - 81 * sc + bob, 12.5 * sc, Math.PI, 0);
+    ctx.arc(x, y - 146 * sc + bob, 22 * sc, Math.PI, 0);
     ctx.fillStyle = '#fff';
     ctx.fill();
   }
@@ -509,7 +503,7 @@
         // pencereler
         if (sc > 0.14) {
           ctx.fillStyle = 'rgba(40, 60, 90, 0.7)';
-          const rows = Math.max(2, Math.floor(s.h / 90));
+          const rows = Math.max(2, Math.floor(s.h / 170));
           for (let ri = 0; ri < rows; ri++) {
             for (let ciX = 0; ciX < 3; ciX++) {
               ctx.fillRect(
@@ -523,28 +517,29 @@
       } else if (s.kind === 'crowd') {
         if (sc < 0.1) continue;
         for (let i = 0; i < s.n; i++) {
-          const px = x + (i - s.n / 2) * 24 * sc;
+          const px = x + (i - s.n / 2) * 44 * sc;
           const col = SHIRTS[Math.floor((s.seed + i * 7) % SHIRTS.length)];
           const wave = Math.sin(t * 7 + s.seed + i * 1.7);
           // bacaklar
           ctx.fillStyle = '#3a4252';
-          ctx.fillRect(px - 7 * sc, y - 16 * sc, 5.5 * sc, 16 * sc);
-          ctx.fillRect(px + 1.5 * sc, y - 16 * sc, 5.5 * sc, 16 * sc);
+          ctx.fillRect(px - 12 * sc, y - 30 * sc, 10 * sc, 30 * sc);
+          ctx.fillRect(px + 2 * sc, y - 30 * sc, 10 * sc, 30 * sc);
           // gövde
           ctx.fillStyle = col;
-          ctx.fillRect(px - 8 * sc, y - 44 * sc, 16 * sc, 28 * sc);
+          ctx.fillRect(px - 15 * sc, y - 82 * sc, 30 * sc, 52 * sc);
           // kafa
           ctx.beginPath();
-          ctx.arc(px, y - 52 * sc, 8.5 * sc, 0, Math.PI * 2);
+          ctx.arc(px, y - 97 * sc, 16 * sc, 0, Math.PI * 2);
           ctx.fillStyle = '#e8b88a';
           ctx.fill();
           // sallanan kol (tezahürat)
           if (wave > 0) {
             ctx.strokeStyle = col;
-            ctx.lineWidth = 5 * sc;
+            ctx.lineWidth = 9 * sc;
+            ctx.lineCap = 'round';
             ctx.beginPath();
-            ctx.moveTo(px + 7 * sc, y - 38 * sc);
-            ctx.lineTo(px + 15 * sc, y - 60 * sc - wave * 5 * sc);
+            ctx.moveTo(px + 13 * sc, y - 70 * sc);
+            ctx.lineTo(px + 28 * sc, y - 112 * sc - wave * 9 * sc);
             ctx.stroke();
           }
         }
