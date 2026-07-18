@@ -2,7 +2,9 @@ name: DigitalOcean Droplet'e Deploy (Docker)
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - claude/gold-game-index-page-h80dgz
   workflow_dispatch:
 
 concurrency:
