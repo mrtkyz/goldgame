@@ -1,4 +1,4 @@
-name: DigitalOcean Droplet'e Deploy
+name: DigitalOcean Droplet'e Deploy (Docker)
 
 on:
   push:
@@ -16,6 +16,9 @@ jobs:
       - name: Kodu indir
         uses: actions/checkout@v4
 
+      - name: Docker imajını test amaçlı derle
+        run: docker build -t goldgame:ci .
+
       - name: SSH anahtarını hazırla
         run: |
           mkdir -p ~/.ssh
@@ -31,10 +34,18 @@ jobs:
             --exclude '.github' \
             --exclude 'deploy' \
             --exclude 'README.md' \
-            ./ "${{ secrets.DO_USER }}@${{ secrets.DO_HOST }}:${{ secrets.DO_TARGET_DIR || '/var/www/goldgame' }}/"
+            ./ "${{ secrets.DO_USER }}@${{ secrets.DO_HOST }}:${{ secrets.DO_TARGET_DIR || '/opt/goldgame' }}/"
+
+      - name: Container'ı yeniden derleyip başlat
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.DO_PORT || '22' }}" \
+            "${{ secrets.DO_USER }}@${{ secrets.DO_HOST }}" \
+            "cd '${{ secrets.DO_TARGET_DIR || '/opt/goldgame' }}' \
+             && docker compose up -d --build \
+             && docker image prune -f"
 
       - name: Deploy sonucunu doğrula
         run: |
           ssh -i ~/.ssh/deploy_key -p "${{ secrets.DO_PORT || '22' }}" \
             "${{ secrets.DO_USER }}@${{ secrets.DO_HOST }}" \
-            "test -f '${{ secrets.DO_TARGET_DIR || '/var/www/goldgame' }}/index.html' && echo 'Deploy basarili: index.html sunucuda mevcut'"
+            "curl -fsS http://localhost/ > /dev/null && echo 'Deploy basarili: site yanit veriyor'"

@@ -1,0 +1,7 @@
+services:
+  goldgame:
+    build: .
+    container_name: goldgame
+    ports:
+      - "80:80"
+    restart: unless-stopped

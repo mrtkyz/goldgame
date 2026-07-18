@@ -1,32 +1,37 @@
 #!/usr/bin/env bash
 #
-# DigitalOcean droplet'ini goldgame için bir kereliğine hazırlar.
-# Droplet'te root (veya sudo yetkili bir kullanıcı) olarak çalıştırın:
+# DigitalOcean droplet'ini goldgame'in Docker ile deploy'u için
+# bir kereliğine hazırlar. Droplet'te root olarak çalıştırın:
 #
 #   bash setup-server.sh
 #
 # Yaptıkları:
-#   1. nginx kurar
-#   2. /var/www/goldgame dizinini oluşturur
-#   3. nginx'i bu dizini sunacak şekilde ayarlar
-#   4. "deploy" adında, sadece bu dizine yazabilen bir kullanıcı oluşturur
+#   1. Docker ve docker compose eklentisini kurar
+#   2. /opt/goldgame dizinini oluşturur
+#   3. "deploy" adında bir kullanıcı oluşturup docker grubuna ekler
+#      (GitHub Actions bu kullanıcıyla bağlanıp container'ı günceller)
 #
 set -euo pipefail
 
-SITE_DIR="/var/www/goldgame"
+SITE_DIR="/opt/goldgame"
 DEPLOY_USER="deploy"
 
-echo "==> nginx kuruluyor..."
-apt-get update -qq
-apt-get install -y -qq nginx
+echo "==> Docker kuruluyor..."
+if ! command -v docker &>/dev/null; then
+  curl -fsSL https://get.docker.com | sh
+else
+  echo "    Docker zaten kurulu, atlanıyor."
+fi
+systemctl enable --now docker
 
-echo "==> Site dizini oluşturuluyor: ${SITE_DIR}"
+echo "==> Uygulama dizini oluşturuluyor: ${SITE_DIR}"
 mkdir -p "${SITE_DIR}"
 
 echo "==> Deploy kullanıcısı oluşturuluyor: ${DEPLOY_USER}"
 if ! id "${DEPLOY_USER}" &>/dev/null; then
   useradd --create-home --shell /bin/bash "${DEPLOY_USER}"
 fi
+usermod -aG docker "${DEPLOY_USER}"
 chown -R "${DEPLOY_USER}:${DEPLOY_USER}" "${SITE_DIR}"
 
 echo "==> Deploy kullanıcısı için SSH dizini hazırlanıyor"
@@ -36,36 +41,6 @@ touch "${DEPLOY_HOME}/.ssh/authorized_keys"
 chmod 700 "${DEPLOY_HOME}/.ssh"
 chmod 600 "${DEPLOY_HOME}/.ssh/authorized_keys"
 chown -R "${DEPLOY_USER}:${DEPLOY_USER}" "${DEPLOY_HOME}/.ssh"
-
-echo "==> nginx site ayarı yazılıyor"
-cat > /etc/nginx/sites-available/goldgame <<'NGINX'
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-
-    root /var/www/goldgame;
-    index index.html;
-
-    server_name _;
-
-    location / {
-        try_files $uri $uri/ =404;
-    }
-
-    # Oyun tek dosya; statik içerik için basit önbellek başlıkları
-    location ~* \.(html)$ {
-        add_header Cache-Control "no-cache";
-    }
-}
-NGINX
-
-ln -sf /etc/nginx/sites-available/goldgame /etc/nginx/sites-enabled/goldgame
-rm -f /etc/nginx/sites-enabled/default
-
-echo "==> nginx test edilip yeniden yükleniyor"
-nginx -t
-systemctl reload nginx
-systemctl enable nginx
 
 echo
 echo "Kurulum tamam! Şimdi yapmanız gerekenler:"
@@ -77,4 +52,4 @@ echo "  3. Özel anahtarı (goldgame_deploy) GitHub repo ayarlarında"
 echo "     DO_SSH_PRIVATE_KEY adlı secret olarak kaydedin."
 echo "     Diğer secret'lar: DO_HOST (droplet IP), DO_USER (${DEPLOY_USER})"
 echo
-echo "Site şu an http://<droplet-ip>/ adresinde yayında (deploy sonrası oyun görünür)."
+echo "İlk deploy'dan sonra oyun http://<droplet-ip>/ adresinde yayında olacak."
