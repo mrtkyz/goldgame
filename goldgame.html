@@ -75,7 +75,7 @@
   let level = 1;
   let best = +(localStorage.getItem('goldgame-best') || 0);
 
-  const player = { x: W / 2, y: H - 80, w: 90, h: 60, speed: 420, vx: 0 };
+  const player = { x: W / 2, y: H - 80, w: 90, h: 60, speed: 480, vx: 0 };
   let items = [];        // düşen nesneler
   let sparkles = [];     // efekt parçacıkları
   let floaters = [];     // "+10" yazıları
@@ -227,20 +227,21 @@
     }
 
     // Oyuncu hareketi: her yöne serbest
-    let dx = 0, dy = 0;
-    if (keys['ArrowLeft'] || keys['a'] || keys['A']) dx -= 1;
-    if (keys['ArrowRight'] || keys['d'] || keys['D']) dx += 1;
-    if (keys['ArrowUp'] || keys['w'] || keys['W']) dy -= 1;
-    if (keys['ArrowDown'] || keys['s'] || keys['S']) dy += 1;
     if (pointerX !== null) {
-      const diffX = pointerX - player.x;
-      const diffY = pointerY - player.y;
-      dx = Math.abs(diffX) > 6 ? Math.sign(diffX) : 0;
-      dy = Math.abs(diffY) > 6 ? Math.sign(diffY) : 0;
+      // Dokunmatik/fare: çanak parmağı yumuşakça birebir takip eder
+      const follow = Math.min(1, dt * 14);
+      player.x += (pointerX - player.x) * follow;
+      player.y += (pointerY - player.y) * follow;
+    } else {
+      let dx = 0, dy = 0;
+      if (keys['ArrowLeft'] || keys['a'] || keys['A']) dx -= 1;
+      if (keys['ArrowRight'] || keys['d'] || keys['D']) dx += 1;
+      if (keys['ArrowUp'] || keys['w'] || keys['W']) dy -= 1;
+      if (keys['ArrowDown'] || keys['s'] || keys['S']) dy += 1;
+      if (dx !== 0 && dy !== 0) { dx *= 0.7071; dy *= 0.7071; } // çapraz hız sabit kalsın
+      player.x += dx * player.speed * dt;
+      player.y += dy * player.speed * dt;
     }
-    if (dx !== 0 && dy !== 0) { dx *= 0.7071; dy *= 0.7071; } // çapraz hız sabit kalsın
-    player.x += dx * player.speed * dt;
-    player.y += dy * player.speed * dt;
     player.x = Math.max(player.w / 2, Math.min(W - player.w / 2, player.x));
     player.y = Math.max(80, Math.min(H - player.h - 10, player.y));
 
