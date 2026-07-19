@@ -95,10 +95,26 @@
   }
   #steerL { left: 18px; }
   #steerR { right: 18px; }
+  #brake {
+    left: calc(50% - 92px);
+    border-color: rgba(255, 100, 90, 0.6);
+    color: #ff6b5e;
+    font-size: 17px;
+    font-weight: bold;
+  }
+  #gas {
+    left: calc(50% + 8px);
+    border-color: rgba(127, 255, 158, 0.6);
+    color: #7fff9e;
+    font-size: 17px;
+    font-weight: bold;
+  }
   @media (pointer: coarse) {
     .steer { display: block; }
   }
   .steer:active { background: rgba(159, 232, 181, 0.35); }
+  #brake:active { background: rgba(255, 100, 90, 0.35); }
+  #gas:active { background: rgba(127, 255, 158, 0.35); }
 </style>
 </head>
 <body>
@@ -113,6 +129,8 @@
 </div>
 <div id="wrap"><canvas id="game" width="480" height="720"></canvas></div>
 <button id="steerL" class="steer" aria-label="Sola dön">◀</button>
+<button id="brake" class="steer" aria-label="Fren">FREN</button>
+<button id="gas" class="steer" aria-label="Gaz">GAZ</button>
 <button id="steerR" class="steer" aria-label="Sağa dön">▶</button>
 <script>
 (() => {
@@ -137,16 +155,14 @@
   let state = STATE.MENU;
   let paused = false;
 
-  let distance, speed, playerX, elapsed;
-  let curveCur, curveTarget, sectionEnd;
+  let distance, speed, playerX, elapsed, braking;
   let hillCur, hillTarget, hillEnd;
   let trees, rocks, posts, nextTreeZ, nextRockZ, nextPostZ;
   let shake, rumbleAcc;
   let best = +(localStorage.getItem('araba-best') || 0);
 
   function resetWorld() {
-    distance = 0; speed = 6; playerX = 0; elapsed = 0;
-    curveCur = 0; curveTarget = 0; sectionEnd = 30;
+    distance = 0; speed = 0; playerX = 0; elapsed = 0; braking = false;
     hillCur = 0; hillTarget = 0; hillEnd = 20;
     trees = []; rocks = []; posts = [];
     nextTreeZ = 4; nextRockZ = 14; nextPostZ = 3;
@@ -226,11 +242,11 @@
   addEventListener('keydown', e => {
     if (state === STATE.MENU && (e.key === ' ' || e.key === 'Enter')) { startGame(); e.preventDefault(); return; }
     keys[e.key] = true;
-    if ([' ', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
+    if ([' ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) e.preventDefault();
   });
   addEventListener('keyup', e => keys[e.key] = false);
 
-  let steerTouch = 0;
+  let steerTouch = 0, gasTouch = false, brakeTouch = false;
   for (const [id, val] of [['steerL', -1], ['steerR', 1]]) {
     const btn = document.getElementById(id);
     btn.addEventListener('pointerdown', e => {
@@ -240,6 +256,17 @@
     });
     for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) {
       btn.addEventListener(ev, () => { if (steerTouch === val) steerTouch = 0; });
+    }
+  }
+  for (const [id, setter] of [['gas', v => gasTouch = v], ['brake', v => brakeTouch = v]]) {
+    const btn = document.getElementById(id);
+    btn.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      if (state !== STATE.PLAYING) { startGame(); return; }
+      setter(true);
+    });
+    for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) {
+      btn.addEventListener(ev, () => setter(false));
     }
   }
   canvas.addEventListener('pointerdown', () => {
@@ -269,19 +296,18 @@
     if (state !== STATE.PLAYING || paused) return;
     elapsed += dt;
 
-    // Hız: ılımlı tavana doğru
-    const maxSpeed = Math.min(22, 13 + elapsed * 0.12);
-    speed += (maxSpeed - speed) * dt * 0.4;
-
-    // Virajlar (dağ yolu dönemeçleri)
-    if (distance > sectionEnd) {
-      curveTarget = (Math.random() * 2 - 1) * 1.0;
-      if (Math.random() < 0.25) curveTarget = 0;
-      sectionEnd = distance + 25 + Math.random() * 35;
+    // Gaz ve fren: hız tamamen sürücünün kontrolünde
+    const gas = keys['ArrowUp'] || keys['w'] || keys['W'] || gasTouch;
+    braking = keys['ArrowDown'] || keys['s'] || keys['S'] || brakeTouch;
+    if (braking) {
+      speed = Math.max(0, speed - 20 * dt);          // fren: güçlü yavaşlama
+    } else if (gas) {
+      speed = Math.min(24, speed + 9 * dt);          // gaz: hızlan (en fazla 120 km/s)
+    } else {
+      speed = Math.max(0, speed - 3 * dt);           // pedal yoksa yavaşça süzül
     }
-    curveCur += (curveTarget - curveCur) * dt * 0.8;
 
-    // Tepeler: iniş ve çıkışlar
+    // Tepeler: iniş ve çıkışlar (yol dümdüz, viraj yok)
     if (distance > hillEnd) {
       hillTarget = (Math.random() * 2 - 1) * 55;
       hillEnd = distance + 30 + Math.random() * 40;
@@ -292,8 +318,7 @@
     let steer = steerTouch;
     if (keys['ArrowLeft'] || keys['a'] || keys['A']) steer = -1;
     else if (keys['ArrowRight'] || keys['d'] || keys['D']) steer = 1;
-    playerX += steer * dt * 2.0;
-    playerX += curveCur * speed * 0.010 * dt;   // merkezkaç: viraja karşı kır
+    playerX += steer * dt * 2.0 * Math.min(1, speed / 8); // duran araba dönmez
     playerX = Math.max(-1.35, Math.min(1.35, playerX));
 
     // Yol dışı: toprakta yavaşlarsın
@@ -319,7 +344,7 @@
 
   // ---- Çizim ----
   let horizonY = BASE_HORIZON;
-  const rowCenter = f => W / 2 - playerX * ROADHALF * f + curveCur * (1 - f) * (1 - f) * BEND;
+  const rowCenter = f => W / 2 - playerX * ROADHALF * f;
 
   function drawSky() {
     const t = performance.now() / 1000;
@@ -354,8 +379,8 @@
     ctx.quadraticCurveTo(ex + 8, 130 - flap, ex + 16, 130);
     ctx.stroke();
 
-    // uzak karlı dağlar (virajla hafif kayar)
-    const mOff = -curveCur * 50;
+    // uzak karlı dağlar
+    const mOff = 0;
     for (const [mx, mw, mh, col, snow] of [
       [-80, 300, 150, '#8ba3b8', true],
       [120, 340, 190, '#7b93a8', true],
@@ -534,10 +559,10 @@
     ctx.fillRect(-58, -74, 10, 12);
     ctx.fillRect(48, -74, 10, 12);
 
-    // stop lambaları (parlayan)
-    ctx.fillStyle = '#ff3b2e';
+    // stop lambaları (frende çok daha parlak)
+    ctx.fillStyle = braking ? '#ff1500' : '#ff3b2e';
     ctx.shadowColor = '#ff3b2e';
-    ctx.shadowBlur = 12;
+    ctx.shadowBlur = braking ? 30 : 10;
     ctx.fillRect(-82, -18, 26, 12);
     ctx.fillRect(56, -18, 26, 12);
     ctx.shadowBlur = 0;
@@ -620,10 +645,10 @@
         ['DAĞ YOLU', 46, '#9fe8b5'],
         ['', 14, '#fff'],
         ['Dağlarda araba sürüşü!', 20, '#ddd'],
-        ['Virajlarda yolda kal,', 16, '#aaa'],
-        ['tepelerden inip çık', 16, '#aaa'],
+        ['GAZ: yukarı ok / W veya GAZ pedalı', 16, '#7fff9e'],
+        ['FREN: aşağı ok / S veya FREN pedalı', 16, '#ff8080'],
+        ['Yön: sağ-sol ok / A-D veya ekran okları', 16, '#aaa'],
         ['Yoldan çıkarsan toprakta yavaşlarsın', 16, '#ffb020'],
-        ['Ok tuşları / A-D veya ekran okları', 16, '#aaa'],
         ['Başlamak için tıkla veya SPACE', 20, '#ffd54a'],
       ]);
     } else if (paused && state === STATE.PLAYING) {
