@@ -132,19 +132,40 @@
   fit();
 
   // ---- Oyun durumu ----
-  const STATE = { MENU: 0, PLAYING: 1, OVER: 2 };
+  const STATE = { MENU: 0, PLAYING: 1 };
   let state = STATE.MENU;
   let paused = false;
 
-  let distance, speed, playerX, lives, elapsed;
-  let obstacles, nextObstZ;
-  let invTimer, flashTimer, shake, gullT;
-  let best = +(localStorage.getItem('gemi-best') || 0);
+  let distance, speed, playerX, delivered;
+  let port, buoys, nextBuoyZ;
+  let deliverT, missT, cargo;
+  let gullT = 4;
+  let best = +(localStorage.getItem('gemi-teslimat-best') || 0);
+
+  const CARGO_COLORS = ['#e74c3c', '#f1c40f', '#2ecc71', '#3498db', '#e67e22', '#9b59b6', '#1abc9c'];
+
+  function newCargo() {
+    cargo = [];
+    for (let i = 0; i < 4; i++) {
+      cargo.push(CARGO_COLORS[Math.floor(Math.random() * CARGO_COLORS.length)]);
+    }
+  }
+
+  function newPort(num) {
+    port = {
+      z: distance + 130 + Math.random() * 110,
+      x: (Math.random() * 1.6 - 0.8),
+      num,
+      done: false,
+    };
+  }
 
   function resetWorld() {
-    distance = 0; speed = 8; playerX = 0; lives = 3; elapsed = 0;
-    obstacles = []; nextObstZ = 25;
-    invTimer = 0; flashTimer = 0; shake = 0; gullT = 4;
+    distance = 0; speed = 4; playerX = 0; delivered = 0;
+    deliverT = 0; missT = 0;
+    buoys = []; nextBuoyZ = 15;
+    newCargo();
+    newPort(1);
   }
   resetWorld();
 
@@ -153,16 +174,6 @@
     state = STATE.PLAYING;
     paused = false;
     sndHorn();
-  }
-
-  function gameOver() {
-    state = STATE.OVER;
-    sndOver();
-    const m = Math.floor(distance * 2);
-    if (m > best) {
-      best = m;
-      localStorage.setItem('gemi-best', best);
-    }
   }
 
   // ---- Sesler ----
@@ -188,15 +199,15 @@
     o.stop(t0 + dur);
   }
   const sndHorn = () => { beep(140, 0.5, 'sawtooth', 0.15); beep(180, 0.5, 'sawtooth', 0.1); };
-  const sndCrash = () => { beep(100, 0.3, 'sawtooth', 0.22); beep(60, 0.45, 'sawtooth', 0.18, 0.06); };
   const sndGull = () => { beep(1500, 0.12, 'sine', 0.06); beep(1300, 0.1, 'sine', 0.05, 0.15); };
-  const sndOver = () => { beep(330, 0.25, 'square', 0.1); beep(220, 0.4, 'square', 0.1, 0.2); };
+  const sndDeliver = () => { [523, 659, 784, 1047].forEach((f, i) => beep(f, 0.2, 'triangle', 0.15, i * 0.13)); };
+  const sndMiss = () => { beep(420, 0.2, 'triangle', 0.1); beep(330, 0.3, 'triangle', 0.1, 0.18); };
+  const sndBell = () => { beep(1180, 0.3, 'triangle', 0.12); beep(1180, 0.3, 'triangle', 0.1, 0.35); };
 
   // ---- Girdi ----
   const keys = {};
   addEventListener('keydown', e => {
-    if ((state === STATE.MENU || state === STATE.OVER) &&
-        (e.key === ' ' || e.key === 'Enter')) { startGame(); e.preventDefault(); return; }
+    if (state === STATE.MENU && (e.key === ' ' || e.key === 'Enter')) { startGame(); e.preventDefault(); return; }
     keys[e.key] = true;
     if ([' ', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
   });
@@ -239,76 +250,72 @@
   // ---- Güncelleme ----
   function update(dt) {
     if (state !== STATE.PLAYING || paused) return;
-    elapsed += dt;
 
-    // Hız: zamanla artar
-    const maxSpeed = Math.min(26, 14 + elapsed * 0.15);
-    speed += (maxSpeed - speed) * dt * 0.35;
+    // Teslimat kutlaması: gemi iskelede bekler
+    if (deliverT > 0) {
+      deliverT -= dt;
+      speed = Math.max(0, speed - dt * 10);
+      if (deliverT <= 0) {
+        newCargo();
+        newPort(delivered + 1);
+        sndBell(); // yeni yük alındı
+      }
+      return;
+    }
+    if (missT > 0) missT -= dt;
+
+    // Sakin seyir: yavaş ve sabit tempo
+    const maxSpeed = 10;
+    speed += (maxSpeed - speed) * dt * 0.4;
 
     // Dümen
     let steer = steerTouch;
     if (keys['ArrowLeft'] || keys['a'] || keys['A']) steer = -1;
     else if (keys['ArrowRight'] || keys['d'] || keys['D']) steer = 1;
-    playerX += steer * dt * 1.9;
+    playerX += steer * dt * 1.6;
     playerX = Math.max(-1.3, Math.min(1.3, playerX));
 
     distance += speed * dt;
-    shake = Math.max(0, shake - dt * 10);
 
     // Martı sesi ara sıra
     gullT -= dt;
     if (gullT <= 0) { sndGull(); gullT = 5 + Math.random() * 6; }
 
-    // Engel üret: kaya, ada, tekne
-    while (nextObstZ < distance + 50) {
-      const r = Math.random();
-      const type = r < 0.4 ? 'kaya' : r < 0.72 ? 'tekne' : 'ada';
-      obstacles.push({
-        z: nextObstZ,
-        x: (Math.random() * 2.2 - 1.1),
-        type,
-        s: type === 'tekne' ? 5 + Math.random() * 4 : 0,   // tekneler yavaşça ilerler
+    // Dekoratif şamandıralar (çarpışma yok, sadece hız hissi)
+    while (nextBuoyZ < distance + 50) {
+      buoys.push({
+        z: nextBuoyZ,
+        x: (Math.random() < 0.5 ? -1 : 1) * (1 + Math.random() * 0.4),
         seed: Math.random() * 10,
       });
-      nextObstZ += Math.max(7, 15 - elapsed * 0.08) + Math.random() * 10;
+      nextBuoyZ += 9 + Math.random() * 8;
     }
+    buoys = buoys.filter(b => b.z - distance + 1 > 0.55);
 
-    // Çarpışma ve temizlik
-    if (invTimer > 0) invTimer -= dt;
-    if (flashTimer > 0) flashTimer -= dt;
-    for (let i = obstacles.length - 1; i >= 0; i--) {
-      const ob = obstacles[i];
-      ob.z += ob.s * dt;
-      const zRel = ob.z - distance + 1;
-      if (zRel < 0.55) { obstacles.splice(i, 1); continue; }
-      const hitW = ob.type === 'ada' ? 0.42 : 0.3;
-      if (invTimer <= 0 && zRel < 1.25 && zRel > 0.85 && Math.abs(ob.x - playerX) < hitW) {
-        obstacles.splice(i, 1);
-        lives--;
-        invTimer = 2;
-        flashTimer = 0.4;
-        shake = 4;
-        speed = Math.max(6, speed * 0.4);
-        sndCrash();
-        if (lives <= 0) { gameOver(); return; }
+    // Limana varış kontrolü
+    const zRel = port.z - distance + 1;
+    if (!port.done && zRel < 1.12) {
+      port.done = true;
+      if (Math.abs(port.x - playerX) < 0.6) {
+        // Yanaştık: teslimat!
+        delivered++;
+        if (delivered > best) {
+          best = delivered;
+          localStorage.setItem('gemi-teslimat-best', best);
+        }
+        deliverT = 2.6;
+        sndDeliver();
+      } else {
+        // İskeleyi kaçırdık: yeni liman ileride
+        missT = 2.2;
+        sndMiss();
+        newPort(port.num);
       }
     }
   }
 
   // ---- Çizim ----
   const rowCenter = f => W / 2 - playerX * SEAHALF * f;
-
-  function drawHeart(x, y, r) {
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.fillStyle = '#ff5d8f';
-    ctx.beginPath();
-    ctx.moveTo(0, r * 0.9);
-    ctx.bezierCurveTo(-r * 1.4, -r * 0.2, -r * 0.6, -r * 1.1, 0, -r * 0.3);
-    ctx.bezierCurveTo(r * 0.6, -r * 1.1, r * 1.4, -r * 0.2, 0, r * 0.9);
-    ctx.fill();
-    ctx.restore();
-  }
 
   function drawSky() {
     const t = performance.now() / 1000;
@@ -374,93 +381,108 @@
     }
   }
 
-  function drawObstacle(s, x, y, sc, t) {
-    if (s.type === 'kaya') {
-      ctx.fillStyle = '#5b6572';
-      ctx.beginPath();
-      ctx.ellipse(x, y - 14 * sc, 42 * sc, 28 * sc, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#78828f';
-      ctx.beginPath();
-      ctx.ellipse(x - 14 * sc, y - 30 * sc, 20 * sc, 14 * sc, -0.4, 0, Math.PI * 2);
-      ctx.fill();
-      // köpük halkası
-      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-      ctx.lineWidth = 4 * sc;
-      ctx.beginPath();
-      ctx.ellipse(x, y - 4 * sc, 50 * sc, 12 * sc, 0, 0, Math.PI * 2);
-      ctx.stroke();
-    } else if (s.type === 'ada') {
-      // kum
-      ctx.fillStyle = '#e8cf8e';
-      ctx.beginPath();
-      ctx.ellipse(x, y - 8 * sc, 85 * sc, 26 * sc, 0, 0, Math.PI * 2);
-      ctx.fill();
-      // palmiye gövdesi
-      ctx.strokeStyle = '#8d5a2b';
-      ctx.lineWidth = 8 * sc;
-      ctx.beginPath();
-      ctx.moveTo(x, y - 18 * sc);
-      ctx.quadraticCurveTo(x + 10 * sc, y - 60 * sc, x + 4 * sc, y - 88 * sc);
-      ctx.stroke();
-      // yapraklar
-      ctx.strokeStyle = '#2f9e4b';
-      ctx.lineWidth = 6 * sc;
-      for (const a of [-2.6, -2.1, -1.4, -0.7, -0.2]) {
-        ctx.beginPath();
-        ctx.moveTo(x + 4 * sc, y - 88 * sc);
-        ctx.quadraticCurveTo(
-          x + 4 * sc + Math.cos(a) * 34 * sc, y - 88 * sc + Math.sin(a) * 30 * sc - 8 * sc,
-          x + 4 * sc + Math.cos(a) * 52 * sc, y - 88 * sc + Math.sin(a) * 40 * sc + 6 * sc
-        );
-        ctx.stroke();
-      }
-    } else { // tekne (arkadan görünüm)
-      const bob = Math.sin(t * 2.4 + s.seed) * 3 * sc;
-      // gövde
-      ctx.fillStyle = '#c0533a';
-      ctx.beginPath();
-      ctx.moveTo(x - 34 * sc, y - 34 * sc + bob);
-      ctx.lineTo(x + 34 * sc, y - 34 * sc + bob);
-      ctx.lineTo(x + 24 * sc, y - 4 * sc + bob);
-      ctx.lineTo(x - 24 * sc, y - 4 * sc + bob);
-      ctx.closePath();
-      ctx.fill();
-      // kabin
-      ctx.fillStyle = '#f2ede2';
-      ctx.fillRect(x - 16 * sc, y - 58 * sc + bob, 32 * sc, 26 * sc);
-      ctx.fillStyle = '#3d6f91';
-      ctx.fillRect(x - 10 * sc, y - 52 * sc + bob, 8 * sc, 8 * sc);
-      ctx.fillRect(x + 3 * sc, y - 52 * sc + bob, 8 * sc, 8 * sc);
-      // bayrak direği
-      ctx.strokeStyle = '#5a4632';
+  function drawBuoy(x, y, sc, t, seed) {
+    const bob = Math.sin(t * 2 + seed) * 4 * sc;
+    ctx.fillStyle = '#e74c3c';
+    ctx.beginPath();
+    ctx.moveTo(x - 12 * sc, y + bob);
+    ctx.lineTo(x + 12 * sc, y + bob);
+    ctx.lineTo(x + 7 * sc, y - 26 * sc + bob);
+    ctx.lineTo(x - 7 * sc, y - 26 * sc + bob);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(x - 9 * sc, y - 14 * sc + bob, 18 * sc, 6 * sc);
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 3 * sc;
+    ctx.beginPath();
+    ctx.ellipse(x, y + 4 * sc + bob, 18 * sc, 5 * sc, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  function drawPort(x, y, sc, t, num) {
+    const pw = 340 * sc;   // iskele genişliği
+    // iskele platformu (ahşap)
+    ctx.fillStyle = '#8d5a2b';
+    ctx.fillRect(x - pw / 2, y - 34 * sc, pw, 26 * sc);
+    ctx.fillStyle = '#6b3f16';
+    for (let i = 0; i < 8; i++) {
+      ctx.fillRect(x - pw / 2 + (i + 0.5) * pw / 8, y - 34 * sc, 3 * sc, 26 * sc);
+    }
+    // ayaklar
+    ctx.fillStyle = '#5a4632';
+    for (const px of [-pw * 0.4, -pw * 0.15, pw * 0.15, pw * 0.4]) {
+      ctx.fillRect(x + px - 4 * sc, y - 10 * sc, 8 * sc, 18 * sc);
+    }
+    // depo binası
+    ctx.fillStyle = '#d8d2c2';
+    ctx.fillRect(x - 130 * sc, y - 104 * sc, 130 * sc, 70 * sc);
+    ctx.fillStyle = '#b8432c';
+    ctx.beginPath();
+    ctx.moveTo(x - 140 * sc, y - 104 * sc);
+    ctx.lineTo(x - 65 * sc, y - 132 * sc);
+    ctx.lineTo(x + 10 * sc, y - 104 * sc);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#7a6a54';
+    ctx.fillRect(x - 92 * sc, y - 78 * sc, 40 * sc, 44 * sc);
+    // vinç
+    ctx.strokeStyle = '#e67e22';
+    ctx.lineWidth = 8 * sc;
+    ctx.beginPath();
+    ctx.moveTo(x + 60 * sc, y - 34 * sc);
+    ctx.lineTo(x + 60 * sc, y - 150 * sc);
+    ctx.lineTo(x + 130 * sc, y - 120 * sc);
+    ctx.stroke();
+    ctx.strokeStyle = '#555';
+    ctx.lineWidth = 3 * sc;
+    ctx.beginPath();
+    ctx.moveTo(x + 130 * sc, y - 120 * sc);
+    ctx.lineTo(x + 130 * sc, y - 70 * sc - Math.sin(t * 1.5) * 8 * sc);
+    ctx.stroke();
+    ctx.fillStyle = '#f1c40f';
+    ctx.fillRect(x + 118 * sc, y - 70 * sc - Math.sin(t * 1.5) * 8 * sc, 24 * sc, 18 * sc);
+    // liman tabelası
+    if (sc > 0.12) {
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(x - 60 * sc, y - 174 * sc, 120 * sc, 30 * sc);
+      ctx.strokeStyle = '#2a6f97';
       ctx.lineWidth = 3 * sc;
+      ctx.strokeRect(x - 60 * sc, y - 174 * sc, 120 * sc, 30 * sc);
+      ctx.fillStyle = '#5a4632';
+      ctx.fillRect(x - 4 * sc, y - 144 * sc, 8 * sc, 40 * sc);
+      ctx.fillStyle = '#1a4a6e';
+      ctx.font = 'bold ' + 20 * sc + 'px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('LİMAN ' + num, x, y - 159 * sc);
+    }
+    // giriş şamandıraları (yeşil = giriş)
+    ctx.fillStyle = '#2ecc71';
+    for (const bx of [-pw / 2 - 20 * sc, pw / 2 + 20 * sc]) {
       ctx.beginPath();
-      ctx.moveTo(x, y - 58 * sc + bob);
-      ctx.lineTo(x, y - 78 * sc + bob);
-      ctx.stroke();
-      ctx.fillStyle = '#e74c3c';
-      ctx.fillRect(x, y - 78 * sc + bob, 14 * sc, 8 * sc);
-      // iz köpüğü
-      ctx.fillStyle = 'rgba(255,255,255,0.55)';
-      ctx.beginPath();
-      ctx.ellipse(x, y + bob, 30 * sc, 7 * sc, 0, 0, Math.PI * 2);
+      ctx.arc(x + bx, y - 4 * sc + Math.sin(t * 2 + bx) * 3 * sc, 9 * sc, 0, Math.PI * 2);
       ctx.fill();
     }
   }
 
   function drawSprites() {
     const t = performance.now() / 1000;
-    const sorted = [...obstacles].sort((a, b) => b.z - a.z);
-    for (const s of sorted) {
+    const sprites = [
+      ...buoys.map(b => ({ z: b.z, x: b.x, kind: 'buoy', seed: b.seed })),
+      { z: port.z, x: port.x, kind: 'port', num: port.num },
+    ].sort((a, b) => b.z - a.z);
+
+    for (const s of sprites) {
       const zRel = s.z - distance + 1;
       if (zRel < 0.55) continue;
       const f = 1 / zRel;
-      if (f > 1.05 || f < 0.03) continue;
+      if (f > 1.05 || f < 0.02) continue;
       const fc = Math.min(f, 1);
       const y = HORIZON + fc * (H - HORIZON);
       const x = rowCenter(fc) + s.x * SEAHALF * fc;
-      drawObstacle(s, x, y, fc, t);
+      if (s.kind === 'buoy') drawBuoy(x, y, fc, t, s.seed);
+      else drawPort(x, y, fc, t, s.num);
     }
   }
 
@@ -469,8 +491,7 @@
     const steer = (keys['ArrowLeft'] || keys['a'] || keys['A'] || steerTouch === -1) ? -1
                 : (keys['ArrowRight'] || keys['d'] || keys['D'] || steerTouch === 1) ? 1 : 0;
     const bob = Math.sin(t * 2) * 5;
-    const sx = (Math.random() - 0.5) * shake * 2;
-    const baseX = W / 2 + playerX * 26 + sx;
+    const baseX = W / 2 + playerX * 26;
     const baseY = H - 40 + bob;
 
     // dümen suyu (köpük izi)
@@ -486,7 +507,6 @@
     ctx.save();
     ctx.translate(baseX, baseY);
     ctx.rotate(steer * 0.06);
-    if (invTimer > 0 && Math.floor(invTimer * 8) % 2 === 0) ctx.globalAlpha = 0.45;
 
     // gövde (kıç taraftan)
     ctx.fillStyle = '#b8432c';
@@ -514,6 +534,27 @@
     // küpeşte
     ctx.fillStyle = '#7a2b1b';
     ctx.fillRect(-95, -66, 190, 8);
+    // güvertedeki yük konteynerleri
+    if (deliverT <= 0) {
+      cargo.forEach((col, i) => {
+        const cx = i < 2 ? -86 + (i % 2) * 0 : 62;
+        const side = i < 2 ? -1 : 1;
+        const stackX = side * 74;
+        const stackY = -66 - 24 * (i % 2) - 24;
+        ctx.fillStyle = col;
+        ctx.fillRect(stackX - 18, stackY, 36, 22);
+        ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(stackX - 18, stackY, 36, 22);
+        // konteyner çizgileri
+        ctx.beginPath();
+        ctx.moveTo(stackX - 6, stackY);
+        ctx.lineTo(stackX - 6, stackY + 22);
+        ctx.moveTo(stackX + 6, stackY);
+        ctx.lineTo(stackX + 6, stackY + 22);
+        ctx.stroke();
+      });
+    }
     // kabin
     ctx.fillStyle = '#f2ede2';
     ctx.fillRect(-52, -118, 104, 52);
@@ -551,7 +592,6 @@
     ctx.closePath();
     ctx.fill();
 
-    ctx.globalAlpha = 1;
     ctx.restore();
   }
 
@@ -560,14 +600,27 @@
     ctx.fillRect(0, 0, W, 58);
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#fff';
+    ctx.fillStyle = '#ffd54a';
     ctx.font = 'bold 24px sans-serif';
-    ctx.fillText(Math.floor(distance * 2) + ' m', 118, 22);
+    ctx.fillText('Teslimat: ' + delivered, 118, 22);
     ctx.fillStyle = '#7fdcff';
     ctx.font = '15px sans-serif';
-    ctx.fillText('Hız: ' + Math.floor(speed * 1.2) + ' knot   Rekor: ' + best + ' m', 118, 45);
-    for (let i = 0; i < lives; i++) {
-      drawHeart(W - 82 - i * 30, 26, 12);
+    const kalan = Math.max(0, Math.ceil((port.z - distance) * 2));
+    ctx.fillText('Limana: ' + kalan + ' m   Hız: ' + Math.floor(speed * 1.2) + ' knot   Rekor: ' + best, 118, 45);
+
+    // liman yön göstergesi: iskele hangi taraftaysa ok o yöne
+    const dx = port.x - playerX;
+    if (Math.abs(dx) > 0.2 && deliverT <= 0) {
+      const ax = W / 2 + Math.sign(dx) * 150;
+      ctx.fillStyle = '#ffd54a';
+      ctx.beginPath();
+      if (dx > 0) {
+        ctx.moveTo(ax + 18, 90); ctx.lineTo(ax - 8, 76); ctx.lineTo(ax - 8, 104);
+      } else {
+        ctx.moveTo(ax - 18, 90); ctx.lineTo(ax + 8, 76); ctx.lineTo(ax + 8, 104);
+      }
+      ctx.closePath();
+      ctx.fill();
     }
   }
 
@@ -598,19 +651,37 @@
     drawShip();
     if (state !== STATE.MENU) drawHUD();
 
-    if (flashTimer > 0) {
-      ctx.fillStyle = 'rgba(255, 40, 20, ' + (flashTimer * 0.8) + ')';
-      ctx.fillRect(0, 0, W, H);
+    // teslimat kutlaması
+    if (state === STATE.PLAYING && !paused && deliverT > 0) {
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'rgba(5, 18, 35, 0.5)';
+      ctx.fillRect(0, H * 0.3, W, 150);
+      ctx.fillStyle = '#7fff9e';
+      ctx.font = 'bold 38px sans-serif';
+      ctx.fillText('YÜK TESLİM EDİLDİ!', W / 2, H * 0.36);
+      ctx.fillStyle = '#ffd54a';
+      ctx.font = 'bold 24px sans-serif';
+      ctx.fillText('Yeni yük yükleniyor...', W / 2, H * 0.36 + 50);
+    }
+    // iskeleyi kaçırma mesajı
+    if (state === STATE.PLAYING && !paused && missT > 0) {
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#ffb020';
+      ctx.font = 'bold 26px sans-serif';
+      ctx.fillText('İskeleyi kaçırdın! İleride yenisi var', W / 2, H * 0.34);
     }
 
     if (state === STATE.MENU) {
       drawCenteredPanel([
         ['GEMİ SÜRÜŞÜ', 44, '#7fdcff'],
         ['', 14, '#fff'],
-        ['TALHA gemisiyle denize açıl!', 20, '#ddd'],
-        ['Kayalardan, adalardan ve teknelerden kaç', 16, '#aaa'],
+        ['TALHA gemisiyle yük taşı!', 20, '#ddd'],
+        ['Limandan limana yük götür,', 16, '#aaa'],
+        ['sarı ok iskelenin yönünü gösterir', 16, '#aaa'],
+        ['İskeleye dümen kırıp yanaş, teslim et', 16, '#aaa'],
         ['Ok tuşları / A-D veya ekran okları', 16, '#aaa'],
-        ['Gittikçe hızlanırsın, rotanı iyi çiz!', 16, '#ffb020'],
         ['Başlamak için tıkla veya SPACE', 20, '#ffd54a'],
       ]);
     } else if (paused && state === STATE.PLAYING) {
@@ -618,15 +689,6 @@
         ['DURAKLATILDI', 40, '#ffd54a'],
         ['', 10, '#fff'],
         ['Devam etmek için Ayarlar > Başlat', 18, '#ddd'],
-      ]);
-    } else if (state === STATE.OVER) {
-      const m = Math.floor(distance * 2);
-      drawCenteredPanel([
-        ['GEMİ BATTI!', 44, '#ff6b6b'],
-        ['Mesafe: ' + m + ' m', 30, '#7fdcff'],
-        [m >= best && m > 0 ? '★ YENİ REKOR! ★' : 'Rekor: ' + best + ' m', 24, '#ffd54a'],
-        ['', 10, '#fff'],
-        ['Tekrar denize açılmak için tıkla veya SPACE', 19, '#ddd'],
       ]);
     }
 
