@@ -138,6 +138,7 @@
 
   let distance, speed, playerX, delivered;
   let port, buoys, nextBuoyZ;
+  let obstacles, nextObstZ, bumpT, shake;
   let deliverT, missT, cargo;
   let gullT = 4;
   let best = +(localStorage.getItem('gemi-teslimat-best') || 0);
@@ -164,6 +165,7 @@
     distance = 0; speed = 4; playerX = 0; delivered = 0;
     deliverT = 0; missT = 0;
     buoys = []; nextBuoyZ = 15;
+    obstacles = []; nextObstZ = 40; bumpT = 0; shake = 0;
     newCargo();
     newPort(1);
   }
@@ -199,6 +201,7 @@
     o.stop(t0 + dur);
   }
   const sndHorn = () => { beep(140, 0.5, 'sawtooth', 0.15); beep(180, 0.5, 'sawtooth', 0.1); };
+  const sndCrash = () => { beep(90, 0.35, 'sawtooth', 0.22); beep(55, 0.5, 'sawtooth', 0.18, 0.08); };
   const sndGull = () => { beep(1500, 0.12, 'sine', 0.06); beep(1300, 0.1, 'sine', 0.05, 0.15); };
   const sndDeliver = () => { [523, 659, 784, 1047].forEach((f, i) => beep(f, 0.2, 'triangle', 0.15, i * 0.13)); };
   const sndMiss = () => { beep(420, 0.2, 'triangle', 0.1); beep(330, 0.3, 'triangle', 0.1, 0.18); };
@@ -291,6 +294,37 @@
       nextBuoyZ += 9 + Math.random() * 8;
     }
     buoys = buoys.filter(b => b.z - distance + 1 > 0.55);
+
+    // Büyük engeller: kayalık, büyük ada, deniz feneri
+    while (nextObstZ < distance + 55) {
+      // İskelenin yakınına engel koyma (yanaşma adil kalsın)
+      if (Math.abs(nextObstZ - port.z) > 14) {
+        const r = Math.random();
+        obstacles.push({
+          z: nextObstZ,
+          x: (Math.random() * 2 - 1) * 1.05,
+          type: r < 0.4 ? 'kaya' : r < 0.75 ? 'ada' : 'fener',
+          seed: Math.random() * 10,
+        });
+      }
+      nextObstZ += 16 + Math.random() * 14;
+    }
+    obstacles = obstacles.filter(o => o.z - distance + 1 > 0.55);
+
+    // Engele çarpma: batmazsın ama fena yavaşlar ve sarsılırsın
+    if (bumpT > 0) bumpT -= dt;
+    shake = Math.max(0, shake - dt * 8);
+    for (const ob of obstacles) {
+      const zRel = ob.z - distance + 1;
+      const hitW = ob.type === 'ada' ? 0.55 : ob.type === 'fener' ? 0.42 : 0.38;
+      if (bumpT <= 0 && zRel > 0.85 && zRel < 1.25 && Math.abs(ob.x - playerX) < hitW) {
+        speed = 1.5;
+        bumpT = 1.2;
+        shake = 5;
+        playerX += (playerX >= ob.x ? 1 : -1) * 0.22;
+        sndCrash();
+      }
+    }
 
     // Limana varış kontrolü
     const zRel = port.z - distance + 1;
@@ -400,6 +434,101 @@
     ctx.stroke();
   }
 
+  function drawObstacle(s, x, y, sc, t) {
+    if (s.type === 'kaya') {
+      // büyük kayalık kümesi
+      ctx.fillStyle = '#5b6572';
+      ctx.beginPath();
+      ctx.ellipse(x, y - 30 * sc, 90 * sc, 55 * sc, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#6d7784';
+      ctx.beginPath();
+      ctx.ellipse(x - 55 * sc, y - 18 * sc, 45 * sc, 32 * sc, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#78828f';
+      ctx.beginPath();
+      ctx.ellipse(x + 50 * sc, y - 22 * sc, 40 * sc, 30 * sc, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#98a2ad';
+      ctx.beginPath();
+      ctx.ellipse(x - 20 * sc, y - 62 * sc, 34 * sc, 22 * sc, -0.3, 0, Math.PI * 2);
+      ctx.fill();
+      // dalga köpüğü
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      ctx.lineWidth = 5 * sc;
+      ctx.beginPath();
+      ctx.ellipse(x, y - 4 * sc, 110 * sc, 16 * sc, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (s.type === 'ada') {
+      // büyük ada
+      ctx.fillStyle = '#e8cf8e';
+      ctx.beginPath();
+      ctx.ellipse(x, y - 14 * sc, 160 * sc, 44 * sc, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#d9bd75';
+      ctx.beginPath();
+      ctx.ellipse(x + 30 * sc, y - 30 * sc, 90 * sc, 26 * sc, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // iki palmiye
+      for (const [ox, lean] of [[-50, -1], [55, 1]]) {
+        ctx.strokeStyle = '#8d5a2b';
+        ctx.lineWidth = 12 * sc;
+        ctx.beginPath();
+        ctx.moveTo(x + ox * sc, y - 28 * sc);
+        ctx.quadraticCurveTo(x + (ox + lean * 16) * sc, y - 90 * sc, x + (ox + lean * 8) * sc, y - 128 * sc);
+        ctx.stroke();
+        ctx.strokeStyle = '#2f9e4b';
+        ctx.lineWidth = 9 * sc;
+        for (const a of [-2.7, -2.1, -1.4, -0.8, -0.2]) {
+          ctx.beginPath();
+          ctx.moveTo(x + (ox + lean * 8) * sc, y - 128 * sc);
+          ctx.quadraticCurveTo(
+            x + (ox + lean * 8) * sc + Math.cos(a) * 48 * sc, y - 128 * sc + Math.sin(a) * 42 * sc - 10 * sc,
+            x + (ox + lean * 8) * sc + Math.cos(a) * 74 * sc, y - 128 * sc + Math.sin(a) * 56 * sc + 8 * sc
+          );
+          ctx.stroke();
+        }
+      }
+    } else { // deniz feneri
+      // kaya taban
+      ctx.fillStyle = '#6d7784';
+      ctx.beginPath();
+      ctx.ellipse(x, y - 16 * sc, 70 * sc, 34 * sc, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // kule: kırmızı-beyaz şeritli
+      const tw = 40 * sc, th = 150 * sc;
+      for (let i = 0; i < 5; i++) {
+        ctx.fillStyle = i % 2 ? '#e8e8e8' : '#d64545';
+        const yTop = y - 30 * sc - th + (i * th) / 5;
+        const wTop = tw * (0.7 + 0.3 * (i / 5));
+        ctx.fillRect(x - wTop / 2, yTop, wTop, th / 5 + 1);
+      }
+      // fener odası
+      ctx.fillStyle = '#333';
+      ctx.fillRect(x - 20 * sc, y - 30 * sc - th - 22 * sc, 40 * sc, 22 * sc);
+      // dönen ışık
+      const lightOn = Math.floor(t * 1.5 + s.seed) % 2 === 0;
+      ctx.fillStyle = lightOn ? '#ffe89a' : '#8a7a4a';
+      if (lightOn) { ctx.shadowColor = '#ffe89a'; ctx.shadowBlur = 25 * sc; }
+      ctx.fillRect(x - 14 * sc, y - 30 * sc - th - 18 * sc, 28 * sc, 14 * sc);
+      ctx.shadowBlur = 0;
+      // çatı
+      ctx.fillStyle = '#d64545';
+      ctx.beginPath();
+      ctx.moveTo(x - 24 * sc, y - 30 * sc - th - 22 * sc);
+      ctx.lineTo(x, y - 30 * sc - th - 44 * sc);
+      ctx.lineTo(x + 24 * sc, y - 30 * sc - th - 22 * sc);
+      ctx.closePath();
+      ctx.fill();
+      // köpük
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      ctx.lineWidth = 5 * sc;
+      ctx.beginPath();
+      ctx.ellipse(x, y - 2 * sc, 85 * sc, 14 * sc, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
   function drawPort(x, y, sc, t, num) {
     const pw = 340 * sc;   // iskele genişliği
     // iskele platformu (ahşap)
@@ -470,6 +599,7 @@
     const t = performance.now() / 1000;
     const sprites = [
       ...buoys.map(b => ({ z: b.z, x: b.x, kind: 'buoy', seed: b.seed })),
+      ...obstacles.map(o => ({ z: o.z, x: o.x, kind: 'obst', o })),
       { z: port.z, x: port.x, kind: 'port', num: port.num },
     ].sort((a, b) => b.z - a.z);
 
@@ -482,6 +612,7 @@
       const y = HORIZON + fc * (H - HORIZON);
       const x = rowCenter(fc) + s.x * SEAHALF * fc;
       if (s.kind === 'buoy') drawBuoy(x, y, fc, t, s.seed);
+      else if (s.kind === 'obst') drawObstacle(s.o, x, y, fc, t);
       else drawPort(x, y, fc, t, s.num);
     }
   }
@@ -491,8 +622,8 @@
     const steer = (keys['ArrowLeft'] || keys['a'] || keys['A'] || steerTouch === -1) ? -1
                 : (keys['ArrowRight'] || keys['d'] || keys['D'] || steerTouch === 1) ? 1 : 0;
     const bob = Math.sin(t * 2) * 5;
-    const baseX = W / 2 + playerX * 26;
-    const baseY = H - 40 + bob;
+    const baseX = W / 2 + playerX * 26 + (Math.random() - 0.5) * shake * 3;
+    const baseY = H - 40 + bob + (Math.random() - 0.5) * shake * 2;
 
     // dümen suyu (köpük izi)
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
@@ -681,6 +812,7 @@
         ['Limandan limana yük götür,', 16, '#aaa'],
         ['sarı ok iskelenin yönünü gösterir', 16, '#aaa'],
         ['İskeleye dümen kırıp yanaş, teslim et', 16, '#aaa'],
+        ['Kayalık, ada ve fenerlere çarpma: yavaşlarsın!', 16, '#ffb020'],
         ['Ok tuşları / A-D veya ekran okları', 16, '#aaa'],
         ['Başlamak için tıkla veya SPACE', 20, '#ffd54a'],
       ]);
