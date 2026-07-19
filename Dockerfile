@@ -1,7 +1,7 @@
 FROM caddy:2-alpine
 
 COPY Caddyfile /etc/caddy/Caddyfile
-COPY index.html goldgame.html yilan.html bisiklet.html gemi.html /srv/
+COPY index.html goldgame.html yilan.html bisiklet.html gemi.html araba.html /srv/
 
 EXPOSE 80 443
 
