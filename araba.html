@@ -151,7 +151,7 @@
   fit();
 
   // ---- Oyun durumu ----
-  const STATE = { MENU: 0, PLAYING: 1 };
+  const STATE = { MENU: 0, PLAYING: 1, OVER: 2 };
   let state = STATE.MENU;
   let paused = false;
 
@@ -159,10 +159,12 @@
   let hillCur, hillTarget, hillEnd;
   let trees, rocks, posts, nextTreeZ, nextRockZ, nextPostZ;
   let shake, rumbleAcc;
+  let chasing, chaseP, sirenAcc, sirenTone;
   let best = +(localStorage.getItem('araba-best') || 0);
 
   function resetWorld() {
     distance = 0; speed = 0; playerX = 0; elapsed = 0; braking = false;
+    chasing = false; chaseP = 0; sirenAcc = 0; sirenTone = false;
     hillCur = 0; hillTarget = 0; hillEnd = 20;
     trees = []; rocks = []; posts = [];
     nextTreeZ = 4; nextRockZ = 14; nextPostZ = 3;
@@ -236,11 +238,12 @@
   }
   const sndStart = () => { beep(90, 0.3, 'sawtooth', 0.15); beep(140, 0.25, 'sawtooth', 0.12, 0.25); beep(200, 0.2, 'sawtooth', 0.1, 0.45); };
   const sndRumble = () => beep(75, 0.05, 'triangle', 0.06);
+  const sndCaught = () => { beep(500, 0.3, 'square', 0.12); beep(380, 0.3, 'square', 0.12, 0.3); beep(260, 0.5, 'square', 0.12, 0.6); };
 
   // ---- Girdi ----
   const keys = {};
   addEventListener('keydown', e => {
-    if (state === STATE.MENU && (e.key === ' ' || e.key === 'Enter')) { startGame(); e.preventDefault(); return; }
+    if (state !== STATE.PLAYING && (e.key === ' ' || e.key === 'Enter')) { startGame(); e.preventDefault(); return; }
     keys[e.key] = true;
     if ([' ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) e.preventDefault();
   });
@@ -333,6 +336,28 @@
     }
 
     distance += speed * dt;
+
+    // Polis kovalamacası: 100 km/s üstünde peşine takılır
+    const kmh = speed * 5;
+    if (kmh > 100) chasing = true;
+    if (chasing) {
+      chaseP += (kmh > 100 ? 0.085 : -0.22) * dt;
+      if (chaseP <= 0) { chaseP = 0; chasing = false; }
+      else {
+        // siren
+        sirenAcc += dt;
+        if (sirenAcc > 0.5) {
+          sirenAcc = 0;
+          sirenTone = !sirenTone;
+          beep(sirenTone ? 720 : 950, 0.45, 'square', 0.07);
+        }
+        if (chaseP >= 1) {
+          state = STATE.OVER;
+          sndCaught();
+          return;
+        }
+      }
+    }
 
     // Sahne üretimi
     while (nextTreeZ < distance + 50) spawnTree();
@@ -591,6 +616,85 @@
     ctx.restore();
   }
 
+  function drawPolice() {
+    if (!chasing || chaseP <= 0) return;
+    const t = performance.now() / 1000;
+    // Yaklaştıkça alttan yanına sokulur
+    const px = W / 2 + playerX * 24 - 165;
+    const py = H + 170 - chaseP * 250 + Math.sin(t * 8) * 2;
+
+    ctx.save();
+    ctx.translate(px, py);
+
+    // gölge
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.beginPath();
+    ctx.ellipse(0, 34, 100, 13, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // tekerlekler
+    ctx.fillStyle = '#191c20';
+    ctx.fillRect(-90, 4, 24, 30);
+    ctx.fillRect(66, 4, 24, 30);
+    // gövde (beyaz)
+    ctx.fillStyle = '#eef1f4';
+    ctx.beginPath();
+    ctx.moveTo(-84, 28);
+    ctx.lineTo(-80, -24);
+    ctx.quadraticCurveTo(0, -34, 80, -24);
+    ctx.lineTo(84, 28);
+    ctx.quadraticCurveTo(0, 38, -84, 28);
+    ctx.closePath();
+    ctx.fill();
+    // mavi şerit
+    ctx.fillStyle = '#1c5fae';
+    ctx.fillRect(-84, -4, 168, 14);
+    // tavan + arka cam
+    ctx.fillStyle = '#dfe4e8';
+    ctx.beginPath();
+    ctx.moveTo(-56, -24);
+    ctx.lineTo(-42, -64);
+    ctx.quadraticCurveTo(0, -72, 42, -64);
+    ctx.lineTo(56, -24);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#243447';
+    ctx.beginPath();
+    ctx.moveTo(-44, -28);
+    ctx.lineTo(-34, -58);
+    ctx.quadraticCurveTo(0, -65, 34, -58);
+    ctx.lineTo(44, -28);
+    ctx.closePath();
+    ctx.fill();
+    // POLİS yazısı
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 15px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('POLİS', 0, 3);
+    // tepe lambası (çakar): kırmızı-mavi yanıp söner
+    const flash = Math.floor(t * 6) % 2 === 0;
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = flash ? '#ff2020' : '#2060ff';
+    ctx.fillStyle = '#ff2020';
+    ctx.globalAlpha = flash ? 1 : 0.35;
+    ctx.fillRect(-26, -74, 22, 10);
+    ctx.globalAlpha = flash ? 0.35 : 1;
+    ctx.fillStyle = '#2060ff';
+    ctx.shadowColor = flash ? '#2060ff' : '#ff2020';
+    ctx.fillRect(4, -74, 22, 10);
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 0;
+    // farlar
+    ctx.fillStyle = '#fff2b8';
+    ctx.shadowColor = '#fff2b8';
+    ctx.shadowBlur = 10;
+    ctx.fillRect(-76, -20, 20, 9);
+    ctx.fillRect(56, -20, 20, 9);
+    ctx.shadowBlur = 0;
+
+    ctx.restore();
+  }
+
   function drawHUD() {
     ctx.fillStyle = 'rgba(10, 28, 18, 0.55)';
     ctx.fillRect(0, 0, W, 58);
@@ -599,9 +703,32 @@
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 24px sans-serif';
     ctx.fillText(Math.floor(distance * 2) + ' m', 118, 22);
-    ctx.fillStyle = '#9fe8b5';
-    ctx.font = '15px sans-serif';
-    ctx.fillText('Hız: ' + Math.floor(speed * 5) + ' km/s   Rekor: ' + best + ' m', 118, 45);
+    const kmh = Math.floor(speed * 5);
+    ctx.fillStyle = kmh > 100 ? '#ff6b5e' : '#9fe8b5';
+    ctx.font = kmh > 100 ? 'bold 15px sans-serif' : '15px sans-serif';
+    ctx.fillText('Hız: ' + kmh + ' km/s   Rekor: ' + best + ' m', 118, 45);
+
+    if (chasing && chaseP > 0) {
+      const t = performance.now() / 1000;
+      // uyarı yazısı
+      if (Math.floor(t * 3) % 2 === 0) {
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#ff4030';
+        ctx.font = 'bold 26px sans-serif';
+        ctx.fillText('POLİS PEŞİNDE! Yavaşla!', W / 2, 84);
+      }
+      // yakalanma çubuğu
+      ctx.textAlign = 'left';
+      const pw = W - 236;
+      ctx.fillStyle = 'rgba(255,255,255,0.25)';
+      ctx.fillRect(118, 54, pw, 5);
+      ctx.fillStyle = '#ff4030';
+      ctx.fillRect(118, 54, pw * Math.min(1, chaseP), 5);
+      // çakar yansıması: ekran kenarları kırmızı-mavi yanar
+      const flash = Math.floor(t * 6) % 2 === 0;
+      ctx.fillStyle = flash ? 'rgba(255,30,30,0.10)' : 'rgba(40,90,255,0.10)';
+      ctx.fillRect(0, 0, W, H);
+    }
   }
 
   function drawCenteredPanel(lines) {
@@ -638,6 +765,7 @@
     drawRoad();
     drawSprites();
     drawCar();
+    drawPolice();
     if (state !== STATE.MENU) drawHUD();
 
     if (state === STATE.MENU) {
@@ -648,7 +776,8 @@
         ['GAZ: yukarı ok / W veya GAZ pedalı', 16, '#7fff9e'],
         ['FREN: aşağı ok / S veya FREN pedalı', 16, '#ff8080'],
         ['Yön: sağ-sol ok / A-D veya ekran okları', 16, '#aaa'],
-        ['Yoldan çıkarsan toprakta yavaşlarsın', 16, '#ffb020'],
+        ['DİKKAT: 100 km/s üstünde polis kovalar!', 16, '#ff6b5e'],
+        ['Yakalanmadan önce yavaşla!', 16, '#ffb020'],
         ['Başlamak için tıkla veya SPACE', 20, '#ffd54a'],
       ]);
     } else if (paused && state === STATE.PLAYING) {
@@ -656,6 +785,15 @@
         ['DURAKLATILDI', 40, '#ffd54a'],
         ['', 10, '#fff'],
         ['Devam etmek için Ayarlar > Başlat', 18, '#ddd'],
+      ]);
+    } else if (state === STATE.OVER) {
+      drawCenteredPanel([
+        ['YAKALANDIN!', 46, '#ff4030'],
+        ['Polis seni kenara çekti', 20, '#fff'],
+        ['Mesafe: ' + Math.floor(distance * 2) + ' m', 26, '#9fe8b5'],
+        ['Rekor: ' + best + ' m', 20, '#ffd54a'],
+        ['', 10, '#fff'],
+        ['Tekrar sürmek için tıkla veya SPACE', 20, '#ddd'],
       ]);
     }
 
