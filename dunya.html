@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Blok Dünyası</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    background: #1c2a1e;
+    font-family: 'Segoe UI', Tahoma, Verdana, sans-serif;
+    overflow: hidden;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  #wrap {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #game {
+    display: block;
+    border-radius: 12px;
+    box-shadow: 0 0 40px rgba(160, 220, 130, 0.25);
+    max-width: 100vw;
+    max-height: 100vh;
+  }
+
+  #back {
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    z-index: 10;
+    color: #b5e8a0;
+    background: rgba(15, 30, 18, 0.75);
+    border: 1px solid rgba(181, 232, 160, 0.4);
+    border-radius: 20px;
+    padding: 6px 14px;
+    font-size: 14px;
+    text-decoration: none;
+  }
+
+  /* Ayarlar menüsü */
+  #settings {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+  }
+  #settings button {
+    border: 2px solid rgba(181, 232, 160, 0.5);
+    background: rgba(15, 30, 18, 0.85);
+    color: #b5e8a0;
+    border-radius: 999px;
+    font-size: 16px;
+    padding: 10px 18px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #gear {
+    width: 46px;
+    height: 46px;
+    padding: 0 !important;
+    font-size: 24px;
+    border-radius: 50% !important;
+  }
+  #menu { display: flex; flex-direction: column; gap: 8px; }
+  #menu.hidden { display: none; }
+
+  /* Hareket düğmeleri: sadece dokunmatik cihazlarda görünür */
+  .mbtn {
+    display: none;
+    position: fixed;
+    bottom: 96px;
+    z-index: 10;
+    width: 74px;
+    height: 74px;
+    border-radius: 50%;
+    border: 2px solid rgba(181, 232, 160, 0.5);
+    background: rgba(15, 30, 18, 0.55);
+    color: #b5e8a0;
+    font-size: 30px;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+    opacity: 0.85;
+  }
+  #mLeft { left: 14px; }
+  #mRight { left: 100px; }
+  #mJump { right: 14px; }
+  @media (pointer: coarse) {
+    .mbtn { display: block; }
+  }
+  .mbtn:active { background: rgba(181, 232, 160, 0.35); }
+</style>
+</head>
+<body>
+<a id="back" href="index.html">← Oyunlar</a>
+<div id="settings">
+  <button id="gear" aria-label="Ayarlar">⚙</button>
+  <div id="menu" class="hidden">
+    <button id="btnNew">🌍 Yeni Dünya</button>
+    <button id="btnExit">✕ Çık</button>
+  </div>
+</div>
+<div id="wrap"><canvas id="game" width="480" height="720"></canvas></div>
+<button id="mLeft" class="mbtn" aria-label="Sola yürü">◀</button>
+<button id="mRight" class="mbtn" aria-label="Sağa yürü">▶</button>
+<button id="mJump" class="mbtn" aria-label="Zıpla">⤒</button>
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  const CELL = 24;
+  const COLS = 80, ROWS = 27;          // küçük dünya: 80x27 blok
+  const WORLD_H = ROWS * CELL;         // 648
+  const BAR_H = H - WORLD_H;           // altta envanter çubuğu (72px)
+
+  // Blok türleri
+  const AIR = 0, GRASS = 1, DIRT = 2, STONE = 3, WOOD = 4, LEAF = 5, COAL = 6, BEDROCK = 7;
+  const NAMES = { [GRASS]: 'Çim', [DIRT]: 'Toprak', [STONE]: 'Taş', [WOOD]: 'Odun', [LEAF]: 'Yaprak', [COAL]: 'Kömür' };
+  const HOTBAR = [GRASS, DIRT, STONE, WOOD, LEAF, COAL];
+
+  function fit() {
+    const scale = Math.min(innerWidth / W, innerHeight / H);
+    canvas.style.width = (W * scale) + 'px';
+    canvas.style.height = (H * scale) + 'px';
+  }
+  addEventListener('resize', fit);
+  fit();
+
+  // ---- Durum ----
+  const STATE = { MENU: 0, PLAYING: 1 };
+  let state = STATE.MENU;
+
+  let grid, inv, sel, mode;            // mode: 'kaz' | 'koy'
+  let px, py, vx, vy, onGround, facing;
+  let camX = 0;
+
+  function genWorld() {
+    grid = new Uint8Array(COLS * ROWS);
+    let h = 15;
+    const heights = [];
+    for (let c = 0; c < COLS; c++) {
+      h += Math.floor(Math.random() * 3) - 1;
+      h = Math.max(10, Math.min(21, h));
+      heights.push(h);
+      for (let r = 0; r < ROWS; r++) {
+        let b = AIR;
+        if (r === ROWS - 1) b = BEDROCK;
+        else if (r === h) b = GRASS;
+        else if (r > h && r <= h + 3) b = DIRT;
+        else if (r > h + 3) b = (Math.random() < 0.07 ? COAL : STONE);
+        grid[c * ROWS + r] = b;
+      }
+    }
+    // ağaçlar
+    for (let c = 4; c < COLS - 4; c += 6 + Math.floor(Math.random() * 7)) {
+      const gh = heights[c];
+      const th = 3 + Math.floor(Math.random() * 2);
+      for (let i = 1; i <= th; i++) grid[c * ROWS + (gh - i)] = WOOD;
+      const top = gh - th;
+      for (let dc = -2; dc <= 2; dc++) {
+        for (let dr = -1; dr <= 1; dr++) {
+          const cc = c + dc, rr = top - 1 + dr;
+          if (cc < 0 || cc >= COLS || rr < 0) continue;
+          if (Math.abs(dc) === 2 && dr !== 0) continue;
+          if (grid[cc * ROWS + rr] === AIR) grid[cc * ROWS + rr] = LEAF;
+        }
+      }
+      grid[c * ROWS + (top - 2)] = LEAF;
+    }
+    inv = { [GRASS]: 0, [DIRT]: 5, [STONE]: 0, [WOOD]: 0, [LEAF]: 0, [COAL]: 0 };
+    sel = DIRT;
+    mode = 'kaz';
+    // oyuncu: 6. sütunun üstünde doğ
+    px = 6 * CELL + 3;
+    py = (heights[6] - 2) * CELL;
+    vx = 0; vy = 0; facing = 1;
+  }
+
+  const bAt = (c, r) => (c < 0 || c >= COLS || r < 0 || r >= ROWS) ? BEDROCK : grid[c * ROWS + r];
+  const solid = b => b !== AIR;
+
+  // ---- Kaydetme ----
+  function save() {
+    try {
+      localStorage.setItem('dunya-save', JSON.stringify({
+        g: Array.from(grid).join(''),
+        inv, sel, mode, px, py,
+      }));
+    } catch (e) { /* yer yoksa sorun değil */ }
+  }
+  function load() {
+    try {
+      const d = JSON.parse(localStorage.getItem('dunya-save'));
+      if (!d || !d.g || d.g.length !== COLS * ROWS) return false;
+      grid = new Uint8Array(COLS * ROWS);
+      for (let i = 0; i < d.g.length; i++) grid[i] = +d.g[i];
+      inv = d.inv; sel = d.sel; mode = d.mode || 'kaz';
+      px = d.px; py = d.py; vx = 0; vy = 0; facing = 1;
+      return true;
+    } catch (e) { return false; }
+  }
+
+  // ---- Sesler ----
+  let audioCtx = null;
+  function getAudio() {
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      return audioCtx;
+    } catch (e) { return null; }
+  }
+  function beep(freq, dur, type = 'square', vol = 0.08) {
+    const ac = getAudio();
+    if (!ac) return;
+    const o = ac.createOscillator();
+    const g = ac.createGain();
+    o.type = type;
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(vol, ac.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + dur);
+    o.connect(g).connect(ac.destination);
+    o.start();
+    o.stop(ac.currentTime + dur);
+  }
+  const sndDig = () => beep(150, 0.09);
+  const sndPlace = () => beep(320, 0.07);
+  const sndJump = () => beep(500, 0.08, 'sine', 0.05);
+  const sndNo = () => beep(120, 0.12, 'sawtooth', 0.05);
+
+  // ---- Girdi ----
+  const keys = {};
+  addEventListener('keydown', e => {
+    if (state === STATE.MENU && (e.key === ' ' || e.key === 'Enter')) { startGame(); e.preventDefault(); return; }
+    keys[e.key] = true;
+    // 1-6: hotbar seçimi, F: mod değiştir
+    const n = parseInt(e.key);
+    if (n >= 1 && n <= HOTBAR.length) sel = HOTBAR[n - 1];
+    if (e.key === 'f' || e.key === 'F') mode = mode === 'kaz' ? 'koy' : 'kaz';
+    if ([' ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) e.preventDefault();
+  });
+  addEventListener('keyup', e => keys[e.key] = false);
+
+  let touchL = false, touchR = false, touchJ = false;
+  for (const [id, setter] of [
+    ['mLeft', v => touchL = v],
+    ['mRight', v => touchR = v],
+    ['mJump', v => touchJ = v],
+  ]) {
+    const btn = document.getElementById(id);
+    btn.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      if (state !== STATE.PLAYING) { startGame(); return; }
+      setter(true);
+    });
+    for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) {
+      btn.addEventListener(ev, () => setter(false));
+    }
+  }
+
+  // Tıklama / dokunma: blok kaz veya koy, hotbar seç
+  canvas.addEventListener('pointerdown', e => {
+    if (state !== STATE.PLAYING) { startGame(); return; }
+    const rect = canvas.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) / rect.width * W;
+    const my = (e.clientY - rect.top) / rect.height * H;
+
+    // Envanter çubuğuna tıklama
+    if (my > WORLD_H) {
+      const slotW = 64;
+      const startX = (W - HOTBAR.length * slotW - 88) / 2;
+      const idx = Math.floor((mx - startX) / slotW);
+      if (mx >= startX && idx >= 0 && idx < HOTBAR.length) {
+        sel = HOTBAR[idx];
+      } else if (mx > startX + HOTBAR.length * slotW + 8) {
+        mode = mode === 'kaz' ? 'koy' : 'kaz';
+      }
+      return;
+    }
+
+    // Dünyaya tıklama
+    const c = Math.floor((mx + camX) / CELL);
+    const r = Math.floor(my / CELL);
+    // erişim mesafesi: oyuncudan en fazla 4 blok
+    const pcx = (px + 9) / CELL, pcy = (py + 22) / CELL;
+    if (Math.abs(c + 0.5 - pcx) > 4.2 || Math.abs(r + 0.5 - pcy) > 4.2) { sndNo(); return; }
+
+    const b = bAt(c, r);
+    if (mode === 'kaz') {
+      if (b !== AIR && b !== BEDROCK) {
+        inv[b] = (inv[b] || 0) + 1;
+        grid[c * ROWS + r] = AIR;
+        sndDig();
+        save();
+      }
+    } else {
+      // oyuncunun üstüne blok koyma
+      const overlapsPlayer =
+        c === Math.floor((px + 9) / CELL) &&
+        (r === Math.floor(py / CELL) || r === Math.floor((py + 43) / CELL) || r === Math.floor((py + 22) / CELL));
+      if (b === AIR && !overlapsPlayer && (inv[sel] || 0) > 0) {
+        grid[c * ROWS + r] = sel;
+        inv[sel]--;
+        sndPlace();
+        save();
+      } else {
+        sndNo();
+      }
+    }
+  });
+
+  // Ayarlar menüsü
+  const menuEl = document.getElementById('menu');
+  document.getElementById('gear').addEventListener('click', () => {
+    menuEl.classList.toggle('hidden');
+  });
+  document.getElementById('btnNew').addEventListener('click', () => {
+    localStorage.removeItem('dunya-save');
+    genWorld();
+    save();
+    state = STATE.PLAYING;
+    menuEl.classList.add('hidden');
+  });
+  document.getElementById('btnExit').addEventListener('click', () => {
+    save();
+    location.href = 'index.html';
+  });
+
+  function startGame() {
+    if (!grid) {
+      if (!load()) genWorld();
+    }
+    state = STATE.PLAYING;
+  }
+
+  // ---- Fizik ----
+  const PW = 18, PH = 44;   // oyuncu boyutu (px)
+
+  function collide(nx, ny) {
+    const c0 = Math.floor(nx / CELL), c1 = Math.floor((nx + PW - 1) / CELL);
+    const r0 = Math.floor(ny / CELL), r1 = Math.floor((ny + PH - 1) / CELL);
+    for (let c = c0; c <= c1; c++) {
+      for (let r = r0; r <= r1; r++) {
+        if (solid(bAt(c, r))) return true;
+      }
+    }
+    return false;
+  }
+
+  function update(dt) {
+    if (state !== STATE.PLAYING) return;
+
+    const left = keys['ArrowLeft'] || keys['a'] || keys['A'] || touchL;
+    const right = keys['ArrowRight'] || keys['d'] || keys['D'] || touchR;
+    const jump = keys['ArrowUp'] || keys['w'] || keys['W'] || keys[' '] || touchJ;
+
+    vx = left ? -150 : right ? 150 : 0;
+    if (left) facing = -1;
+    if (right) facing = 1;
+
+    if (jump && onGround) {
+      vy = -520;
+      sndJump();
+    }
+    vy = Math.min(700, vy + 1500 * dt);
+
+    // X ekseni
+    let nx = px + vx * dt;
+    if (!collide(nx, py)) px = nx;
+    // Y ekseni
+    let ny = py + vy * dt;
+    if (!collide(px, ny)) {
+      py = ny;
+      onGround = false;
+    } else {
+      if (vy > 0) {
+        py = Math.floor((py + vy * dt + PH) / CELL) * CELL - PH - 0.01;
+        onGround = true;
+      } else {
+        py = Math.ceil((py + vy * dt) / CELL) * CELL + 0.01;
+      }
+      vy = 0;
+    }
+
+    px = Math.max(0, Math.min(COLS * CELL - PW, px));
+    camX = Math.max(0, Math.min(COLS * CELL - W, px + PW / 2 - W / 2));
+  }
+
+  // ---- Çizim ----
+  function drawBlock(b, x, y, c, r) {
+    const sp = ((c * 7 + r * 13) % 5);   // deterministik desen
+    if (b === GRASS) {
+      ctx.fillStyle = '#8a5a2b';
+      ctx.fillRect(x, y, CELL, CELL);
+      ctx.fillStyle = '#4caf50';
+      ctx.fillRect(x, y, CELL, 8);
+      ctx.fillStyle = '#3d9142';
+      ctx.fillRect(x + sp * 4, y + 2, 4, 4);
+    } else if (b === DIRT) {
+      ctx.fillStyle = '#8a5a2b';
+      ctx.fillRect(x, y, CELL, CELL);
+      ctx.fillStyle = '#75481f';
+      ctx.fillRect(x + sp * 4, y + 6 + sp * 2, 5, 5);
+      ctx.fillRect(x + 14 - sp * 2, y + 14, 4, 4);
+    } else if (b === STONE) {
+      ctx.fillStyle = '#8b8f96';
+      ctx.fillRect(x, y, CELL, CELL);
+      ctx.fillStyle = '#767a82';
+      ctx.fillRect(x + sp * 3, y + 4 + sp, 7, 5);
+      ctx.fillRect(x + 12 - sp, y + 15, 6, 4);
+    } else if (b === WOOD) {
+      ctx.fillStyle = '#7a5024';
+      ctx.fillRect(x, y, CELL, CELL);
+      ctx.fillStyle = '#5f3c17';
+      ctx.fillRect(x + 4, y, 3, CELL);
+      ctx.fillRect(x + 15, y, 3, CELL);
+    } else if (b === LEAF) {
+      ctx.fillStyle = '#3e9e46';
+      ctx.fillRect(x, y, CELL, CELL);
+      ctx.fillStyle = '#2f8038';
+      ctx.fillRect(x + sp * 4, y + sp * 3, 5, 5);
+      ctx.fillRect(x + 13 - sp, y + 12 + sp, 5, 5);
+    } else if (b === COAL) {
+      ctx.fillStyle = '#8b8f96';
+      ctx.fillRect(x, y, CELL, CELL);
+      ctx.fillStyle = '#2b2b30';
+      ctx.fillRect(x + 4 + sp, y + 5, 6, 5);
+      ctx.fillRect(x + 13 - sp, y + 13, 5, 5);
+    } else if (b === BEDROCK) {
+      ctx.fillStyle = '#3a3d42';
+      ctx.fillRect(x, y, CELL, CELL);
+      ctx.fillStyle = '#26282c';
+      ctx.fillRect(x + sp * 4, y + sp * 3, 7, 6);
+    }
+    // ince kenar
+    if (b !== AIR) {
+      ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, y + 0.5, CELL - 1, CELL - 1);
+    }
+  }
+
+  function drawSkyAndWorld() {
+    const t = performance.now() / 1000;
+    // gökyüzü
+    const g = ctx.createLinearGradient(0, 0, 0, WORLD_H);
+    g.addColorStop(0, '#69b7e8');
+    g.addColorStop(1, '#bfe0f2');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, WORLD_H);
+    // güneş
+    ctx.fillStyle = '#ffe89a';
+    ctx.fillRect(W - 90 - (camX * 0.05) % 40, 40, 44, 44);
+    // bulutlar (bloklu)
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    for (const [bx, by] of [[60, 60], [240, 100], [420, 50], [620, 80]]) {
+      const x = ((bx - camX * 0.2 + t * 8) % (COLS * CELL * 0.3 + W)) - 60;
+      ctx.fillRect(x, by, 72, 20);
+      ctx.fillRect(x + 14, by - 12, 44, 14);
+    }
+    // bloklar
+    const c0 = Math.floor(camX / CELL), c1 = Math.min(COLS - 1, Math.floor((camX + W) / CELL));
+    for (let c = c0; c <= c1; c++) {
+      for (let r = 0; r < ROWS; r++) {
+        const b = grid[c * ROWS + r];
+        if (b !== AIR) drawBlock(b, c * CELL - camX, r * CELL, c, r);
+      }
+    }
+  }
+
+  function drawPlayer() {
+    const x = px - camX, y = py;
+    ctx.save();
+    // bacaklar
+    ctx.fillStyle = '#3b3f8f';
+    ctx.fillRect(x + 2, y + 30, 6, 14);
+    ctx.fillRect(x + 10, y + 30, 6, 14);
+    // gövde
+    ctx.fillStyle = '#2ea8a3';
+    ctx.fillRect(x + 1, y + 14, 16, 16);
+    // kollar
+    ctx.fillStyle = '#e8b88a';
+    ctx.fillRect(facing === 1 ? x + 15 : x - 3, y + 15, 6, 13);
+    // kafa
+    ctx.fillStyle = '#e8b88a';
+    ctx.fillRect(x + 1, y, 16, 14);
+    // saç
+    ctx.fillStyle = '#5a3a1a';
+    ctx.fillRect(x + 1, y, 16, 4);
+    // göz
+    ctx.fillStyle = '#222';
+    ctx.fillRect(facing === 1 ? x + 11 : x + 4, y + 6, 3, 3);
+    ctx.restore();
+  }
+
+  function drawHotbar() {
+    ctx.fillStyle = '#20301f';
+    ctx.fillRect(0, WORLD_H, W, BAR_H);
+    const slotW = 64;
+    const startX = (W - HOTBAR.length * slotW - 88) / 2;
+    HOTBAR.forEach((b, i) => {
+      const x = startX + i * slotW;
+      const y = WORLD_H + 8;
+      ctx.fillStyle = sel === b ? 'rgba(255, 232, 154, 0.35)' : 'rgba(255,255,255,0.08)';
+      ctx.fillRect(x, y, slotW - 8, BAR_H - 16);
+      if (sel === b) {
+        ctx.strokeStyle = '#ffe89a';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, slotW - 8, BAR_H - 16);
+      }
+      // blok ikonu
+      const bx = x + (slotW - 8) / 2 - 12, by = y + 6;
+      drawBlock(b, bx, by, 1, 1);
+      // adet
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 13px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillText(inv[b] || 0, x + (slotW - 8) / 2, y + BAR_H - 22);
+    });
+    // mod düğmesi
+    const mx = startX + HOTBAR.length * slotW + 8;
+    ctx.fillStyle = mode === 'kaz' ? '#b5651d' : '#2e7d32';
+    ctx.fillRect(mx, WORLD_H + 8, 80, BAR_H - 16);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 16px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(mode === 'kaz' ? '⛏ KAZ' : '🧱 KOY', mx + 40, WORLD_H + BAR_H / 2);
+  }
+
+  function drawCenteredPanel(lines) {
+    ctx.fillStyle = 'rgba(10, 22, 12, 0.8)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    let y = H * 0.26;
+    for (const [text, size, color] of lines) {
+      ctx.fillStyle = color;
+      ctx.font = 'bold ' + size + 'px sans-serif';
+      ctx.fillText(text, W / 2, y);
+      y += size * 1.6;
+    }
+  }
+
+  // ---- Ana döngü ----
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.04, (now - last) / 1000);
+    last = now;
+    update(dt);
+
+    if (grid) {
+      drawSkyAndWorld();
+      drawPlayer();
+      drawHotbar();
+    } else {
+      ctx.fillStyle = '#69b7e8';
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    if (state === STATE.MENU) {
+      drawCenteredPanel([
+        ['BLOK DÜNYASI', 44, '#b5e8a0'],
+        ['', 12, '#fff'],
+        ['Küçük Minecraft dünyan!', 20, '#ddd'],
+        ['Bloklara tıkla: KAZ modunda kazarsın,', 15, '#aaa'],
+        ['KOY modunda envanterinden koyarsın', 15, '#aaa'],
+        ['Alttaki çubuktan blok seç, moda tıkla (veya F)', 15, '#aaa'],
+        ['Yürü: A-D / ok tuşları · Zıpla: SPACE / W', 15, '#aaa'],
+        ['Dünyan otomatik kaydedilir!', 15, '#ffd54a'],
+        ['Başlamak için tıkla veya SPACE', 19, '#ffe89a'],
+      ]);
+    }
+
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
