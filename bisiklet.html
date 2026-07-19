@@ -95,10 +95,18 @@
   }
   #steerL { left: 18px; }
   #steerR { right: 18px; }
+  #boost {
+    left: 50%;
+    transform: translateX(-50%);
+    border-color: rgba(255, 213, 74, 0.6);
+    color: #ffd54a;
+    font-size: 30px;
+  }
   @media (pointer: coarse) {
     .steer { display: block; }
   }
   .steer:active { background: rgba(143, 211, 255, 0.35); }
+  #boost:active { background: rgba(255, 213, 74, 0.35); }
 </style>
 </head>
 <body>
@@ -113,6 +121,7 @@
 </div>
 <div id="wrap"><canvas id="game" width="480" height="720"></canvas></div>
 <button id="steerL" class="steer" aria-label="Sola dön">◀</button>
+<button id="boost" class="steer" aria-label="Hızlan">⚡</button>
 <button id="steerR" class="steer" aria-label="Sağa dön">▶</button>
 <script>
 (() => {
@@ -141,8 +150,9 @@
 
   let distance, speed, playerX, elapsed, countT, finalRank;
   let curveCur, curveTarget, sectionEnd;
-  let rivals, buildings, crowds, nextBldZ, nextCrowdZ;
+  let rivals, crowds, nextCrowdZ;
   let bumpT, shake, rumbleAcc;
+  let stamina, boosting;
   let bestRank = +(localStorage.getItem('bisiklet-best-rank') || 0); // 0 = henüz yok
 
   const JERSEYS = ['#e74c3c', '#3498db', '#f1c40f', '#9b59b6', '#e67e22', '#1abc9c', '#ff6b9d', '#2ecc71', '#f5f5f5'];
@@ -154,6 +164,7 @@
     countT = 3.5; finalRank = 0;
     curveCur = 0; curveTarget = 0; sectionEnd = 35;
     bumpT = 0; shake = 0; rumbleAcc = 0;
+    stamina = 1; boosting = false;
 
     rivals = [];
     for (let i = 0; i < RIVAL_COUNT; i++) {
@@ -161,34 +172,18 @@
         z: 2 + (i % 3) * 2.2,                       // start çizgisinde küme halinde
         x: -0.6 + (i % 5) * 0.3 + Math.random() * 0.1,
         s: 0,
-        target: 15.5 + Math.random() * 6,            // her rakibin kendi temposu
+        target: 17 + Math.random() * 6.5,            // güçlü rakipler
         wob: Math.random() * Math.PI * 2,
         jersey: JERSEYS[i % JERSEYS.length],
         passed: false,
       });
     }
 
-    buildings = []; crowds = [];
-    nextBldZ = 2; nextCrowdZ = 3;
-    seedScenery();
-  }
-
-  function seedScenery() {
-    while (nextBldZ < 50) spawnBuildings();
+    crowds = [];
+    nextCrowdZ = 3;
     while (nextCrowdZ < 50) spawnCrowd();
   }
-  function spawnBuildings() {
-    for (const side of [-1, 1]) {
-      buildings.push({
-        z: nextBldZ + Math.random() * 1.2,
-        x: side * (1.45 + Math.random() * 0.15),
-        h: 700 + Math.random() * 400,
-        w: 380 + Math.random() * 140,
-        color: BLD_COLORS[Math.floor(Math.random() * BLD_COLORS.length)],
-      });
-    }
-    nextBldZ += 4;
-  }
+
   function spawnCrowd() {
     for (const side of [-1, 1]) {
       if (Math.random() < 0.85) {
@@ -263,7 +258,7 @@
   });
   addEventListener('keyup', e => keys[e.key] = false);
 
-  let steerTouch = 0;
+  let steerTouch = 0, boostTouch = false;
   for (const [id, val] of [['steerL', -1], ['steerR', 1]]) {
     const btn = document.getElementById(id);
     btn.addEventListener('pointerdown', e => {
@@ -274,6 +269,15 @@
     for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) {
       btn.addEventListener(ev, () => { if (steerTouch === val) steerTouch = 0; });
     }
+  }
+  const boostBtn = document.getElementById('boost');
+  boostBtn.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    if (state !== STATE.PLAYING) { startGame(); return; }
+    boostTouch = true;
+  });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) {
+    boostBtn.addEventListener(ev, () => boostTouch = false);
   }
   canvas.addEventListener('pointerdown', () => {
     if (state !== STATE.PLAYING) startGame();
@@ -313,9 +317,18 @@
 
     elapsed += dt;
 
-    // Oyuncu hızı: zamanla artan tavana doğru (temiz sürüşte rakiplerden hızlı)
-    const maxSpeed = Math.min(27, 17 + elapsed * 0.35);
-    speed += (maxSpeed - speed) * dt * 0.4;
+    // Enerji (sprint): basılı tutunca hızlanırsın, enerji biter; bırakınca dolar
+    const boostInput = keys[' '] || keys['w'] || keys['W'] || boostTouch;
+    boosting = boostInput && stamina > 0;
+    if (boosting) {
+      stamina = Math.max(0, stamina - dt * 0.3);
+    } else {
+      stamina = Math.min(1, stamina + dt * 0.13);
+    }
+
+    // Oyuncu hızı: sprint olmadan rakipleri geçmek zor
+    const maxSpeed = Math.min(24, 16 + elapsed * 0.18) + (boosting ? 8 : 0);
+    speed += (maxSpeed - speed) * dt * (boosting ? 0.9 : 0.4);
 
     // Direksiyon (yol dümdüz, viraj yok)
     let steer = steerTouch;
@@ -363,9 +376,7 @@
     }
 
     // Sahne üretimi
-    while (nextBldZ < distance + 50) spawnBuildings();
     while (nextCrowdZ < distance + 50) spawnCrowd();
-    buildings = buildings.filter(b => b.z - distance + 1 > 0.5);
     crowds = crowds.filter(c => c.z - distance + 1 > 0.5);
 
     // Bitiş
@@ -436,47 +447,78 @@
   }
 
   function drawRival(r, x, y, sc, t) {
-    const bob = Math.sin(t * 7 + r.wob * 3) * 5 * sc;
+    const bob = Math.sin(t * 7 + r.wob * 3) * 7 * sc;
     // arka tekerlek
     ctx.fillStyle = '#1c1f24';
     ctx.beginPath();
-    ctx.ellipse(x, y - 25 * sc + bob, 20 * sc, 38 * sc, 0, 0, Math.PI * 2);
+    ctx.ellipse(x, y - 36 * sc + bob, 29 * sc, 55 * sc, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = '#4a4f58';
     ctx.beginPath();
-    ctx.ellipse(x, y - 25 * sc + bob, 9 * sc, 27 * sc, 0, 0, Math.PI * 2);
+    ctx.ellipse(x, y - 36 * sc + bob, 13 * sc, 40 * sc, 0, 0, Math.PI * 2);
     ctx.fill();
     // sele borusu
     ctx.fillStyle = '#2e3640';
-    ctx.fillRect(x - 4 * sc, y - 70 * sc + bob, 8 * sc, 30 * sc);
+    ctx.fillRect(x - 6 * sc, y - 102 * sc + bob, 12 * sc, 44 * sc);
     // gövde (forma)
     ctx.fillStyle = r.jersey;
     ctx.beginPath();
-    ctx.ellipse(x, y - 84 * sc + bob, 32 * sc, 43 * sc, 0, 0, Math.PI * 2);
+    ctx.ellipse(x, y - 122 * sc + bob, 46 * sc, 62 * sc, 0, 0, Math.PI * 2);
     ctx.fill();
     // kollar
     ctx.strokeStyle = r.jersey;
-    ctx.lineWidth = 14 * sc;
+    ctx.lineWidth = 20 * sc;
     ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.moveTo(x - 25 * sc, y - 106 * sc + bob); ctx.lineTo(x - 40 * sc, y - 64 * sc + bob);
-    ctx.moveTo(x + 25 * sc, y - 106 * sc + bob); ctx.lineTo(x + 40 * sc, y - 64 * sc + bob);
+    ctx.moveTo(x - 36 * sc, y - 154 * sc + bob); ctx.lineTo(x - 58 * sc, y - 93 * sc + bob);
+    ctx.moveTo(x + 36 * sc, y - 154 * sc + bob); ctx.lineTo(x + 58 * sc, y - 93 * sc + bob);
     ctx.stroke();
     // kafa + kask
     ctx.beginPath();
-    ctx.arc(x, y - 140 * sc + bob, 21 * sc, 0, Math.PI * 2);
+    ctx.arc(x, y - 203 * sc + bob, 30 * sc, 0, Math.PI * 2);
     ctx.fillStyle = '#e8b88a';
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(x, y - 146 * sc + bob, 22 * sc, Math.PI, 0);
+    ctx.arc(x, y - 212 * sc + bob, 31 * sc, Math.PI, 0);
     ctx.fillStyle = '#fff';
     ctx.fill();
+  }
+
+  // Sabit bina cepheleri: sokağın iki yanında hareketsiz dev binalar
+  function drawFacade(x, w, top, bottom, color) {
+    ctx.fillStyle = color;
+    ctx.fillRect(x, top, w, bottom - top);
+    // çatı çizgisi
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.fillRect(x, top, w, 8);
+    // pencereler
+    ctx.fillStyle = 'rgba(40, 60, 90, 0.7)';
+    const cols = Math.max(2, Math.floor(w / 44));
+    const rows = Math.max(3, Math.floor((bottom - top) / 82));
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        ctx.fillRect(
+          x + w * (0.12 + c * (0.8 / cols)),
+          top + (bottom - top) * (0.06 + r * (0.9 / rows)),
+          w * 0.5 / cols,
+          (bottom - top) * 0.5 / rows
+        );
+      }
+    }
+  }
+
+  function drawCityWalls() {
+    // sol taraf
+    drawFacade(-10, 92, 96, 520, BLD_COLORS[0]);
+    drawFacade(58, 66, 170, 490, BLD_COLORS[2]);
+    // sağ taraf
+    drawFacade(W - 82, 92, 120, 520, BLD_COLORS[3]);
+    drawFacade(W - 124, 66, 200, 490, BLD_COLORS[4]);
   }
 
   function drawSprites() {
     const t = performance.now() / 1000;
     const sprites = [
-      ...buildings.map(b => ({ ...b, kind: 'bld' })),
       ...crowds.map(c => ({ ...c, kind: 'crowd' })),
       ...rivals.map(r => ({ z: r.z, x: r.x, kind: 'rival', r })),
     ];
@@ -494,52 +536,32 @@
       const x = rowCenter(fc) + s.x * ROADHALF * fc;
       const sc = fc;
 
-      if (s.kind === 'bld') {
-        const bw = s.w * sc, bh = s.h * sc;
-        ctx.fillStyle = s.color;
-        ctx.fillRect(x - bw / 2, y - bh, bw, bh);
-        ctx.fillStyle = 'rgba(0,0,0,0.18)';
-        ctx.fillRect(x - bw / 2, y - bh, bw * 0.18, bh);
-        // pencereler
-        if (sc > 0.14) {
-          ctx.fillStyle = 'rgba(40, 60, 90, 0.7)';
-          const rows = Math.max(2, Math.floor(s.h / 170));
-          for (let ri = 0; ri < rows; ri++) {
-            for (let ciX = 0; ciX < 3; ciX++) {
-              ctx.fillRect(
-                x - bw / 2 + bw * (0.16 + ciX * 0.28),
-                y - bh + bh * (0.1 + ri * (0.82 / rows)),
-                bw * 0.16, bh * 0.32 / rows
-              );
-            }
-          }
-        }
-      } else if (s.kind === 'crowd') {
+      if (s.kind === 'crowd') {
         if (sc < 0.1) continue;
         for (let i = 0; i < s.n; i++) {
-          const px = x + (i - s.n / 2) * 44 * sc;
+          const px = x + (i - s.n / 2) * 62 * sc;
           const col = SHIRTS[Math.floor((s.seed + i * 7) % SHIRTS.length)];
           const wave = Math.sin(t * 7 + s.seed + i * 1.7);
           // bacaklar
           ctx.fillStyle = '#3a4252';
-          ctx.fillRect(px - 12 * sc, y - 30 * sc, 10 * sc, 30 * sc);
-          ctx.fillRect(px + 2 * sc, y - 30 * sc, 10 * sc, 30 * sc);
+          ctx.fillRect(px - 17 * sc, y - 44 * sc, 14 * sc, 44 * sc);
+          ctx.fillRect(px + 3 * sc, y - 44 * sc, 14 * sc, 44 * sc);
           // gövde
           ctx.fillStyle = col;
-          ctx.fillRect(px - 15 * sc, y - 82 * sc, 30 * sc, 52 * sc);
+          ctx.fillRect(px - 22 * sc, y - 120 * sc, 44 * sc, 76 * sc);
           // kafa
           ctx.beginPath();
-          ctx.arc(px, y - 97 * sc, 16 * sc, 0, Math.PI * 2);
+          ctx.arc(px, y - 142 * sc, 23 * sc, 0, Math.PI * 2);
           ctx.fillStyle = '#e8b88a';
           ctx.fill();
           // sallanan kol (tezahürat)
           if (wave > 0) {
             ctx.strokeStyle = col;
-            ctx.lineWidth = 9 * sc;
+            ctx.lineWidth = 13 * sc;
             ctx.lineCap = 'round';
             ctx.beginPath();
-            ctx.moveTo(px + 13 * sc, y - 70 * sc);
-            ctx.lineTo(px + 28 * sc, y - 112 * sc - wave * 9 * sc);
+            ctx.moveTo(px + 19 * sc, y - 102 * sc);
+            ctx.lineTo(px + 40 * sc, y - 163 * sc - wave * 13 * sc);
             ctx.stroke();
           }
         }
@@ -632,7 +654,7 @@
 
   function drawHUD() {
     ctx.fillStyle = 'rgba(10, 25, 45, 0.55)';
-    ctx.fillRect(0, 0, W, 58);
+    ctx.fillRect(0, 0, W, 70);
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     // sıralama
@@ -647,9 +669,18 @@
     // ilerleme çubuğu
     const pw = W - 236;
     ctx.fillStyle = 'rgba(255,255,255,0.25)';
-    ctx.fillRect(118, 54, pw, 3);
+    ctx.fillRect(118, 52, pw, 3);
     ctx.fillStyle = '#ffd54a';
-    ctx.fillRect(118, 54, pw * Math.min(1, distance / RACE_UNITS), 3);
+    ctx.fillRect(118, 52, pw * Math.min(1, distance / RACE_UNITS), 3);
+    // enerji (sprint) çubuğu
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    ctx.fillRect(118, 58, pw, 6);
+    ctx.fillStyle = boosting ? '#ff9020' : (stamina > 0.3 ? '#7fff9e' : '#ff6b6b');
+    ctx.fillRect(118, 58, pw * stamina, 6);
+    ctx.fillStyle = '#8fd3ff';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('ENERJİ', 118 + pw + 6, 61);
   }
 
   function drawCenteredPanel(lines) {
@@ -677,6 +708,7 @@
 
     drawSky();
     drawRoad();
+    drawCityWalls();
     drawSprites();
     drawHandlebar();
     if (state !== STATE.MENU) drawHUD();
@@ -704,9 +736,9 @@
         ['', 14, '#fff'],
         ['Şehrin dar sokaklarında yarış!', 20, '#ddd'],
         ['9 rakibi geç, birinci olmaya çalış', 16, '#aaa'],
-        ['Seyirciler seni izliyor, kaldırıma çıkma!', 16, '#aaa'],
-        ['Ok tuşları / A-D veya ekran okları', 16, '#aaa'],
-        ['Yarış: 2000 m', 16, '#ffb020'],
+        ['Yön: ok tuşları / A-D veya ekran okları', 16, '#aaa'],
+        ['SPRINT: SPACE basılı tut (enerji biter, dinlenince dolar)', 15, '#ffb020'],
+        ['Sprint yapmazsan rakipler seni geçer!', 16, '#ff8080'],
         ['Başlamak için tıkla veya SPACE', 20, '#ffd54a'],
       ]);
     } else if (paused && state === STATE.PLAYING) {
