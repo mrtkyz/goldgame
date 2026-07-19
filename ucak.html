@@ -97,6 +97,7 @@
   const HORIZON = 250;
   const SIDE = 300;            // dünya yatay kaydırma ölçeği
   const ALT = 300;             // irtifanın ekrandaki ölçeği
+  const YOKE = { x: W / 2, y: H - 84, r: 58 };   // direksiyon konumu
 
   function fit() {
     const scale = Math.min(innerWidth / W, innerHeight / H);
@@ -107,36 +108,23 @@
   fit();
 
   // ---- Oyun durumu ----
-  const STATE = { MENU: 0, PLAYING: 1 };
+  const STATE = { MENU: 0, PLAYING: 1, OVER: 2 };
   let state = STATE.MENU;
   let paused = false;
 
-  let distance, playerX, playerH, rings, clouds, balloons, houses;
-  let nextRingZ, nextCloudZ, nextBalloonZ, nextHouseZ;
-  let score, streak, speed;
-  let best = +(localStorage.getItem('ucak-best') || 0);
+  let distance, playerX, playerH, speed;
+  let clouds, balloons, houses, particles;
+  let nextCloudZ, nextBalloonZ, nextHouseZ;
+  let warnT = 0, crashed = false;
+  let best = +(localStorage.getItem('ucak-best-m') || 0);
 
   function resetWorld() {
-    distance = 0; playerX = 0; playerH = 0.8;
-    rings = []; clouds = []; balloons = []; houses = [];
-    nextRingZ = 20; nextCloudZ = 6; nextBalloonZ = 30; nextHouseZ = 4;
-    score = 0; streak = 0; speed = 14;
-    seed();
-  }
-  function seed() {
+    distance = 0; playerX = 0; playerH = 0.9; speed = 16;
+    clouds = []; balloons = []; houses = []; particles = [];
+    nextCloudZ = 6; nextBalloonZ = 30; nextHouseZ = 4;
+    warnT = 0; crashed = false;
     while (nextCloudZ < 50) spawnCloud();
     while (nextHouseZ < 50) spawnHouse();
-  }
-  function spawnRing() {
-    rings.push({
-      z: nextRingZ,
-      x: (Math.random() * 2 - 1) * 0.9,
-      h: 0.35 + Math.random() * 1.0,
-      counted: false,
-      hit: false,
-      hitT: 0,
-    });
-    nextRingZ += 8 + Math.random() * 8;
   }
   function spawnCloud() {
     clouds.push({
@@ -175,6 +163,28 @@
     sndStart();
   }
 
+  function crash() {
+    crashed = true;
+    const ps = planeScreen();
+    for (let i = 0; i < 60; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const s = 80 + Math.random() * 320;
+      particles.push({
+        x: ps.x, y: ps.y,
+        vx: Math.cos(a) * s, vy: Math.sin(a) * s - 80,
+        life: 0.7 + Math.random() * 0.6,
+        color: ['#ffb020', '#ff5030', '#ffe89a', '#555'][i % 4],
+      });
+    }
+    sndCrash();
+    const m = Math.floor(distance * 2);
+    if (m > best) {
+      best = m;
+      localStorage.setItem('ucak-best-m', best);
+    }
+    state = STATE.OVER;
+  }
+
   // ---- Sesler ----
   let audioCtx = null;
   function getAudio() {
@@ -197,21 +207,22 @@
     o.start(t0);
     o.stop(t0 + dur);
   }
-  const sndStart = () => { beep(120, 0.4, 'sawtooth', 0.12); beep(180, 0.35, 'sawtooth', 0.1, 0.3); };
-  const sndRing = () => { beep(880, 0.12, 'triangle', 0.15); beep(1175, 0.18, 'triangle', 0.15, 0.09); };
-  const sndStreak = () => { beep(880, 0.1, 'triangle', 0.14); beep(1109, 0.1, 'triangle', 0.14, 0.08); beep(1319, 0.16, 'triangle', 0.14, 0.16); };
-  const sndMiss = () => beep(300, 0.2, 'triangle', 0.06);
+  const sndStart = () => { beep(100, 0.5, 'sawtooth', 0.12); beep(150, 0.5, 'sawtooth', 0.1, 0.4); beep(210, 0.4, 'sawtooth', 0.09, 0.8); };
+  const sndWarn = () => beep(820, 0.15, 'square', 0.09);
+  const sndCrash = () => { beep(150, 0.4, 'sawtooth', 0.25); beep(80, 0.6, 'sawtooth', 0.22, 0.08); beep(50, 0.8, 'square', 0.18, 0.18); };
 
   // ---- Girdi ----
   const keys = {};
   addEventListener('keydown', e => {
-    if (state === STATE.MENU && (e.key === ' ' || e.key === 'Enter')) { startGame(); e.preventDefault(); return; }
+    if (state !== STATE.PLAYING && (e.key === ' ' || e.key === 'Enter')) { startGame(); e.preventDefault(); return; }
     keys[e.key] = true;
     if ([' ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) e.preventDefault();
   });
   addEventListener('keyup', e => keys[e.key] = false);
 
-  let pointerX = null, pointerY = null;
+  // Direksiyon (levye): sürükleyerek kullanılır
+  let yokeActive = false;
+  let yokeX = 0, yokeY = 0;    // -1..1
   function pointerPos(e) {
     const r = canvas.getBoundingClientRect();
     return {
@@ -222,15 +233,19 @@
   canvas.addEventListener('pointerdown', e => {
     if (state !== STATE.PLAYING) { startGame(); return; }
     const p = pointerPos(e);
-    pointerX = p.x; pointerY = p.y;
-  });
-  canvas.addEventListener('pointermove', e => {
-    if (pointerX !== null) {
-      const p = pointerPos(e);
-      pointerX = p.x; pointerY = p.y;
+    if (Math.hypot(p.x - YOKE.x, p.y - YOKE.y) < YOKE.r + 46) {
+      yokeActive = true;
+      moveYoke(p);
     }
   });
-  addEventListener('pointerup', () => { pointerX = null; pointerY = null; });
+  canvas.addEventListener('pointermove', e => {
+    if (yokeActive) moveYoke(pointerPos(e));
+  });
+  addEventListener('pointerup', () => { yokeActive = false; });
+  function moveYoke(p) {
+    yokeX = Math.max(-1, Math.min(1, (p.x - YOKE.x) / 70));
+    yokeY = Math.max(-1, Math.min(1, (p.y - YOKE.y) / 70));
+  }
 
   // Ayarlar menüsü
   const menuEl = document.getElementById('menu');
@@ -250,71 +265,68 @@
     location.href = 'index.html';
   });
 
-  // Uçağın ekrandaki konumu: halkalarla aynı perspektif formülü
+  // Uçağın ekrandaki konumu
   const planeScreen = () => ({
     x: W / 2 + playerX * 30,
-    y: H - 14 - playerH * ALT,
+    y: H - 175 - playerH * (ALT * 0.72),
   });
 
   // ---- Güncelleme ----
-  let steerX = 0, steerY = 0;   // görsel yatış için
+  let steerX = 0, steerY = 0;
   function update(dt) {
+    // patlama parçacıkları OVER'da da aksın
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.vy += 300 * dt;
+      p.life -= dt;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+
     if (state !== STATE.PLAYING || paused) return;
 
-    // Kontrol: 4 yön (klavye) veya parmak takibi
+    // Kontrol: direksiyon veya klavye
     let dx = 0, dy = 0;
-    if (pointerX !== null) {
-      const ps = planeScreen();
-      const diffX = pointerX - ps.x;
-      const diffY = (pointerY - 50) - ps.y;
-      dx = Math.abs(diffX) > 10 ? Math.sign(diffX) * Math.min(1, Math.abs(diffX) / 60) : 0;
-      dy = Math.abs(diffY) > 10 ? Math.sign(diffY) * Math.min(1, Math.abs(diffY) / 60) : 0;
+    if (yokeActive) {
+      dx = yokeX;
+      dy = yokeY;
     } else {
+      // bırakınca direksiyon yavaşça ortalanır
+      yokeX += (0 - yokeX) * dt * 8;
+      yokeY += (0 - yokeY) * dt * 8;
       if (keys['ArrowLeft'] || keys['a'] || keys['A']) dx = -1;
       if (keys['ArrowRight'] || keys['d'] || keys['D']) dx = 1;
       if (keys['ArrowUp'] || keys['w'] || keys['W']) dy = -1;
       if (keys['ArrowDown'] || keys['s'] || keys['S']) dy = 1;
+      if (dx || dy) { yokeX = dx * 0.7; yokeY = dy * 0.7; }
     }
     steerX += (dx - steerX) * dt * 6;
     steerY += (dy - steerY) * dt * 6;
-    playerX += dx * 1.6 * dt;
-    playerH -= dy * 1.1 * dt;
+
+    playerX += dx * 1.5 * dt;
     playerX = Math.max(-1.3, Math.min(1.3, playerX));
-    playerH = Math.max(0.15, Math.min(1.5, playerH));
+    // direksiyon yukarı = yüksel; uçak kendiliğinden hafifçe alçalır
+    playerH += (-dy * 0.9 - 0.06) * dt;
+    playerH = Math.min(1.5, playerH);
+
+    // YERE ÇARPMA!
+    if (playerH <= 0.02) {
+      playerH = 0.02;
+      crash();
+      return;
+    }
+
+    // alçak irtifa uyarısı
+    if (playerH < 0.28) {
+      warnT -= dt;
+      if (warnT <= 0) { sndWarn(); warnT = 0.55; }
+    }
 
     distance += speed * dt;
 
-    // Dünya üretimi
-    while (nextRingZ < distance + 55) spawnRing();
     while (nextCloudZ < distance + 55) spawnCloud();
     while (nextBalloonZ < distance + 60) spawnBalloon();
     while (nextHouseZ < distance + 55) spawnHouse();
-
-    // Halka geçişleri
-    for (let i = rings.length - 1; i >= 0; i--) {
-      const rg = rings[i];
-      const zRel = rg.z - distance + 1;
-      if (!rg.counted && zRel < 1.06) {
-        rg.counted = true;
-        if (Math.abs(rg.x - playerX) < 0.42 && Math.abs(rg.h - playerH) < 0.34) {
-          rg.hit = true;
-          rg.hitT = 0.6;
-          streak++;
-          const bonus = Math.min(50, (streak - 1) * 5);
-          score += 10 + bonus;
-          if (streak >= 3) sndStreak(); else sndRing();
-          if (score > best) {
-            best = score;
-            localStorage.setItem('ucak-best', best);
-          }
-        } else {
-          streak = 0;
-          sndMiss();
-        }
-      }
-      if (rg.hitT > 0) rg.hitT -= dt;
-      if (zRel < 0.5) rings.splice(i, 1);
-    }
     clouds = clouds.filter(c => c.z - distance + 1 > 0.4);
     balloons = balloons.filter(b => b.z - distance + 1 > 0.4);
     houses = houses.filter(h => h.z - distance + 1 > 0.5);
@@ -331,12 +343,10 @@
     g.addColorStop(1, '#cfe8f7');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, HORIZON);
-    // güneş
     ctx.beginPath();
     ctx.arc(W * 0.22, 66, 30, 0, Math.PI * 2);
     ctx.fillStyle = '#ffe89a';
     ctx.fill();
-    // uzak dağlar
     ctx.fillStyle = '#89a8c4';
     for (const [mx, mw, mh] of [[-40, 240, 70], [180, 280, 95], [360, 220, 65]]) {
       ctx.beginPath();
@@ -346,7 +356,6 @@
       ctx.closePath();
       ctx.fill();
     }
-    // uzak bulut şeridi
     ctx.fillStyle = 'rgba(255,255,255,0.7)';
     for (const [bx, by, br] of [[100, 120, 18], [300, 100, 22], [440, 130, 16]]) {
       const x = (bx + t * 4) % (W + 60) - 30;
@@ -374,43 +383,12 @@
     for (let sy = HORIZON; sy < H; sy++) {
       const f = (sy - HORIZON) / (H - HORIZON);
       const z = distance + 1 / Math.max(f, 0.02);
-      // tarla şeritleri + ara sıra nehir
       const zi = Math.floor(z * 1.3);
       const isRiver = (zi % 41) === 20;
       const band = zi % 3;
       ctx.fillStyle = isRiver ? '#3d8fd1' : band === 0 ? '#57a05c' : band === 1 ? '#4c8f51' : '#b8a04e';
       ctx.fillRect(0, sy, W, 1);
     }
-  }
-
-  function drawRing(rg, x, y, sc) {
-    const rr = 68 * sc;
-    ctx.save();
-    // halka: turuncu çember, geçilince yeşil parlar
-    ctx.lineWidth = Math.max(3, 10 * sc);
-    ctx.strokeStyle = rg.hitT > 0 ? '#7fff9e' : '#ffb020';
-    if (rg.hitT > 0) {
-      ctx.shadowColor = '#7fff9e';
-      ctx.shadowBlur = 25;
-    }
-    ctx.beginPath();
-    ctx.ellipse(x, y, rr * 0.85, rr, 0, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-    // iç çizgi
-    ctx.lineWidth = Math.max(1.5, 4 * sc);
-    ctx.strokeStyle = rg.hitT > 0 ? '#c8ffd8' : '#ffd54a';
-    ctx.beginPath();
-    ctx.ellipse(x, y, rr * 0.7, rr * 0.84, 0, 0, Math.PI * 2);
-    ctx.stroke();
-    // bayrak süsleri
-    ctx.fillStyle = '#e74c3c';
-    for (const a of [-0.5, 0.5, Math.PI - 0.5, Math.PI + 0.5]) {
-      ctx.beginPath();
-      ctx.arc(x + Math.cos(a) * rr * 0.85, y + Math.sin(a) * rr, Math.max(2, 5 * sc), 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
   }
 
   function drawCloudSprite(x, y, sc, s) {
@@ -471,7 +449,6 @@
       ...houses.map(s => ({ z: s.z, kind: 'house', s })),
       ...clouds.map(s => ({ z: s.z, kind: 'cloud', s })),
       ...balloons.map(s => ({ z: s.z, kind: 'balloon', s })),
-      ...rings.map(s => ({ z: s.z, kind: 'ring', s })),
     ].sort((a, b) => b.z - a.z);
 
     for (const sp of sprites) {
@@ -489,88 +466,177 @@
         const y = flyY(fc, s.h);
         const x = rowCenter(fc) + s.x * SIDE * fc;
         if (sp.kind === 'cloud') drawCloudSprite(x, y, fc, s);
-        else if (sp.kind === 'balloon') drawBalloonSprite(s, x, y, fc, t);
-        else drawRing(s, x, y, fc);
+        else drawBalloonSprite(s, x, y, fc, t);
       }
     }
   }
 
   function drawPlane() {
+    if (crashed) return;   // patladı: sadece parçacıklar
     const t = performance.now() / 1000;
     const ps = planeScreen();
-    const x = ps.x, y = ps.y + Math.sin(t * 2.2) * 3;
-    const bank = steerX * 0.35;
+    const x = ps.x, y = ps.y + Math.sin(t * 2) * 3;
+    const bank = steerX * 0.3;
 
-    // yerdeki gölge (irtifaya göre küçülür ve soluklaşır)
-    const shScale = 1.15 - playerH * 0.45;
-    ctx.fillStyle = 'rgba(0,0,0,' + (0.3 - playerH * 0.13) + ')';
+    // gölge
+    const shScale = 1.2 - playerH * 0.5;
+    ctx.fillStyle = 'rgba(0,0,0,' + Math.max(0.05, 0.32 - playerH * 0.15) + ')';
     ctx.beginPath();
-    ctx.ellipse(x, H - 26, 55 * shScale, 8 * shScale, 0, 0, Math.PI * 2);
+    ctx.ellipse(x, H - 26, 70 * shScale, 9 * shScale, 0, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(bank);
 
-    // pervane bulanıklığı (burnun iki yanından taşar)
-    ctx.fillStyle = 'rgba(200,210,220,0.35)';
-    ctx.beginPath();
-    ctx.ellipse(0, -6, 46, 7 + Math.abs(Math.sin(t * 40)) * 3, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // ana kanatlar
-    const wg = ctx.createLinearGradient(-90, 0, 90, 0);
-    wg.addColorStop(0, '#d8d2c2');
-    wg.addColorStop(0.5, '#f5f0e2');
-    wg.addColorStop(1, '#d8d2c2');
+    // ana kanatlar (geriye ok açılı, geniş)
+    const wg = ctx.createLinearGradient(-120, 0, 120, 0);
+    wg.addColorStop(0, '#c8d2dc');
+    wg.addColorStop(0.5, '#f2f6fa');
+    wg.addColorStop(1, '#c8d2dc');
     ctx.fillStyle = wg;
     ctx.beginPath();
-    ctx.moveTo(-95, 6 + steerY * 6);
-    ctx.lineTo(-14, -2);
-    ctx.lineTo(14, -2);
-    ctx.lineTo(95, 6 + steerY * 6);
-    ctx.lineTo(90, 14 + steerY * 6);
-    ctx.lineTo(-90, 14 + steerY * 6);
+    ctx.moveTo(-122, 16 + steerY * 6);
+    ctx.lineTo(-16, -4);
+    ctx.lineTo(16, -4);
+    ctx.lineTo(122, 16 + steerY * 6);
+    ctx.lineTo(114, 24 + steerY * 6);
+    ctx.lineTo(-114, 24 + steerY * 6);
     ctx.closePath();
     ctx.fill();
-    // kanat uçları kırmızı
-    ctx.fillStyle = '#d64545';
-    ctx.fillRect(-95, 5 + steerY * 6, 14, 9);
-    ctx.fillRect(81, 5 + steerY * 6, 14, 9);
 
-    // gövde
-    const bg = ctx.createLinearGradient(-14, 0, 14, 0);
-    bg.addColorStop(0, '#b8432c');
-    bg.addColorStop(0.5, '#e05540');
-    bg.addColorStop(1, '#b8432c');
+    // motorlar (kanat altı jet)
+    for (const s of [-1, 1]) {
+      ctx.fillStyle = '#8b98a8';
+      ctx.beginPath();
+      ctx.ellipse(s * 58, 22 + steerY * 5, 12, 9, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#39424e';
+      ctx.beginPath();
+      ctx.ellipse(s * 58, 22 + steerY * 5, 8, 6, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // egzoz titremesi
+      ctx.fillStyle = 'rgba(255, 200, 120, ' + (0.25 + Math.abs(Math.sin(t * 20 + s)) * 0.2) + ')';
+      ctx.beginPath();
+      ctx.ellipse(s * 58, 30 + steerY * 5, 5, 3, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // kanat ucu ışıkları: sol kırmızı, sağ yeşil (yanıp söner)
+    if (Math.floor(t * 2.5) % 2 === 0) {
+      ctx.fillStyle = '#ff3030';
+      ctx.shadowColor = '#ff3030';
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.arc(-120, 18 + steerY * 6, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#30ff50';
+      ctx.shadowColor = '#30ff50';
+      ctx.beginPath();
+      ctx.arc(120, 18 + steerY * 6, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+
+    // gövde (geniş yolcu uçağı tüpü)
+    const bg = ctx.createLinearGradient(-20, 0, 20, 0);
+    bg.addColorStop(0, '#c8d2dc');
+    bg.addColorStop(0.45, '#ffffff');
+    bg.addColorStop(1, '#aeb9c6');
     ctx.fillStyle = bg;
     ctx.beginPath();
-    ctx.ellipse(0, 0, 15, 22, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 4, 20, 30, 0, 0, Math.PI * 2);
     ctx.fill();
-
-    // kuyruk: dikey kanatçık
+    // gövde alt kırmızı şerit
     ctx.fillStyle = '#d64545';
     ctx.beginPath();
-    ctx.moveTo(-3, -4);
-    ctx.lineTo(0, -34 - steerY * 5);
-    ctx.lineTo(6, -32 - steerY * 5);
-    ctx.lineTo(7, -4);
+    ctx.ellipse(0, 18, 17, 12, 0, 0, Math.PI);
+    ctx.fill();
+    // pencere şeridi
+    ctx.fillStyle = '#39424e';
+    ctx.fillRect(-14, -2, 28, 4);
+
+    // dikey kuyruk: büyük, kırmızı, TALHA AIR logolu
+    ctx.fillStyle = '#d64545';
+    ctx.beginPath();
+    ctx.moveTo(-4, -16);
+    ctx.lineTo(-2, -66 - steerY * 6);
+    ctx.lineTo(12, -62 - steerY * 6);
+    ctx.lineTo(10, -16);
     ctx.closePath();
     ctx.fill();
-    ctx.fillStyle = '#f5f0e2';
-    ctx.fillRect(0, -30 - steerY * 5, 5, 9);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 13px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('T', 4, -48 - steerY * 6);
     // yatay kuyruk kanatları
-    ctx.fillStyle = '#e8e0cc';
-    ctx.fillRect(-34, -8, 26, 7);
-    ctx.fillRect(8, -8, 26, 7);
-
-    // kokpit
-    ctx.fillStyle = '#4fc9f0';
+    ctx.fillStyle = '#dde5ec';
     ctx.beginPath();
-    ctx.ellipse(0, -12, 8, 6, 0, Math.PI, 0);
+    ctx.moveTo(-52, -14);
+    ctx.lineTo(-6, -22);
+    ctx.lineTo(-6, -14);
+    ctx.lineTo(-48, -8);
+    ctx.closePath();
+    ctx.moveTo(52, -14);
+    ctx.lineTo(6, -22);
+    ctx.lineTo(6, -14);
+    ctx.lineTo(48, -8);
+    ctx.closePath();
     ctx.fill();
 
     ctx.restore();
+  }
+
+  function drawYoke() {
+    const t = performance.now() / 1000;
+    ctx.save();
+    ctx.translate(YOKE.x + yokeX * 16, YOKE.y + yokeY * 12);
+    ctx.rotate(yokeX * 0.55);
+
+    // direksiyon kolonu
+    ctx.fillStyle = '#2e3640';
+    ctx.fillRect(-10, 20, 20, 60);
+    // direksiyon gövdesi: uçak levyesi (U şekli)
+    ctx.strokeStyle = '#39424e';
+    ctx.lineWidth = 17;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(0, 0, YOKE.r, Math.PI * 0.15, Math.PI * 0.85, true);
+    ctx.stroke();
+    ctx.strokeStyle = '#1d2229';
+    ctx.lineWidth = 11;
+    ctx.beginPath();
+    ctx.arc(0, 0, YOKE.r, Math.PI * 0.15, Math.PI * 0.85, true);
+    ctx.stroke();
+    // elcikler
+    ctx.strokeStyle = '#14181d';
+    ctx.lineWidth = 20;
+    for (const s of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(s * YOKE.r * Math.cos(Math.PI * 0.15), -YOKE.r * Math.sin(Math.PI * 0.15));
+      ctx.lineTo(s * YOKE.r * Math.cos(Math.PI * 0.15) + s * 2, -YOKE.r * Math.sin(Math.PI * 0.15) - 26);
+      ctx.stroke();
+    }
+    // orta göbek
+    ctx.fillStyle = '#39424e';
+    ctx.beginPath();
+    ctx.ellipse(0, 6, 30, 22, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffd54a';
+    ctx.font = 'bold 10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('TALHA AIR', 0, 5);
+    ctx.restore();
+
+    // ipucu (direksiyon boştayken hafif parlar)
+    if (!yokeActive && state === STATE.PLAYING) {
+      ctx.fillStyle = 'rgba(168, 216, 255, ' + (0.25 + Math.sin(t * 3) * 0.1) + ')';
+      ctx.font = '12px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('direksiyonu sürükle', YOKE.x, YOKE.y + YOKE.r + 34);
+    }
   }
 
   function drawHUD() {
@@ -580,15 +646,44 @@
     ctx.textBaseline = 'middle';
     ctx.fillStyle = '#ffd54a';
     ctx.font = 'bold 24px sans-serif';
-    ctx.fillText(score, 118, 22);
+    ctx.fillText(Math.floor(distance * 2) + ' m', 118, 22);
     ctx.fillStyle = '#a8d8ff';
     ctx.font = '15px sans-serif';
-    ctx.fillText('Mesafe: ' + Math.floor(distance * 2) + ' m   Rekor: ' + best, 118, 45);
-    if (streak >= 2) {
-      ctx.fillStyle = '#7fff9e';
-      ctx.font = 'bold 16px sans-serif';
-      ctx.textAlign = 'right';
-      ctx.fillText('SERİ x' + streak, W - 16, 24);
+    ctx.fillText('Rekor: ' + best + ' m', 118, 45);
+
+    // irtifa göstergesi (sağda dikey çubuk)
+    const bx = W - 34, by = 90, bh = 200;
+    ctx.fillStyle = 'rgba(12, 28, 48, 0.55)';
+    ctx.fillRect(bx - 8, by - 6, 24, bh + 12);
+    ctx.fillStyle = 'rgba(255, 80, 60, 0.45)';
+    ctx.fillRect(bx - 4, by + bh * 0.82, 16, bh * 0.18);
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    ctx.fillRect(bx - 4, by, 16, bh);
+    const hy = by + bh - (playerH / 1.5) * bh;
+    ctx.fillStyle = playerH < 0.28 ? '#ff5030' : '#7fff9e';
+    ctx.beginPath();
+    ctx.moveTo(bx - 8, hy);
+    ctx.lineTo(bx + 20, hy);
+    ctx.lineTo(bx + 14, hy - 5);
+    ctx.moveTo(bx + 20, hy);
+    ctx.lineTo(bx + 14, hy + 5);
+    ctx.strokeStyle = ctx.fillStyle;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.fillStyle = '#a8d8ff';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('İRTİFA', bx + 4, by - 16);
+
+    // alçak irtifa uyarısı
+    if (state === STATE.PLAYING && playerH < 0.28) {
+      const t = performance.now() / 1000;
+      if (Math.floor(t * 4) % 2 === 0) {
+        ctx.fillStyle = '#ff4030';
+        ctx.font = 'bold 28px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('YUKARI ÇEK!', W / 2, 100);
+      }
     }
   }
 
@@ -597,7 +692,7 @@
     ctx.fillRect(0, 0, W, H);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
-    let y = H * 0.28;
+    let y = H * 0.26;
     for (const [text, size, color] of lines) {
       ctx.fillStyle = color;
       ctx.font = 'bold ' + size + 'px sans-serif';
@@ -617,17 +712,30 @@
     drawGround();
     drawSprites();
     drawPlane();
-    if (state !== STATE.MENU) drawHUD();
+
+    // parçacıklar (patlama)
+    for (const p of particles) {
+      ctx.globalAlpha = Math.max(0, p.life);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x - 3, p.y - 3, 6, 6);
+    }
+    ctx.globalAlpha = 1;
+
+    if (state !== STATE.MENU) {
+      drawHUD();
+      drawYoke();
+    }
 
     if (state === STATE.MENU) {
       drawCenteredPanel([
         ['UÇAK SÜRÜŞÜ', 44, '#a8d8ff'],
         ['', 12, '#fff'],
-        ['Gökyüzünde özgürce uç!', 20, '#ddd'],
-        ['Altın halkaların içinden geç: +10 puan', 16, '#ffb020'],
-        ['Üst üste geçersen seri bonusu kazan!', 16, '#7fff9e'],
-        ['Alçal, yüksel, sağa sola süzül', 16, '#aaa'],
-        ['Ok tuşları / WASD veya parmağınla sürükle', 16, '#aaa'],
+        ['TALHA AIR yolcu uçağını uçur!', 19, '#ddd'],
+        ['Alttaki direksiyonu sürükleyerek', 16, '#aaa'],
+        ['(veya ok tuşları / WASD ile) kullan', 16, '#aaa'],
+        ['Uçak kendiliğinden alçalır:', 16, '#aaa'],
+        ['YERE ÇARPARSAN PATLARSIN!', 17, '#ff6b5e'],
+        ['İrtifanı koru, uzağa uç', 16, '#ffb020'],
         ['Başlamak için tıkla veya SPACE', 19, '#ffd54a'],
       ]);
     } else if (paused && state === STATE.PLAYING) {
@@ -635,6 +743,15 @@
         ['DURAKLATILDI', 40, '#ffd54a'],
         ['', 10, '#fff'],
         ['Devam etmek için Ayarlar > Başlat', 18, '#ddd'],
+      ]);
+    } else if (state === STATE.OVER) {
+      drawCenteredPanel([
+        ['UÇAK DÜŞTÜ!', 46, '#ff4030'],
+        ['', 8, '#fff'],
+        ['Mesafe: ' + Math.floor(distance * 2) + ' m', 28, '#a8d8ff'],
+        ['Rekor: ' + best + ' m', 20, '#ffd54a'],
+        ['', 10, '#fff'],
+        ['Tekrar uçmak için tıkla veya SPACE', 19, '#ddd'],
       ]);
     }
 
