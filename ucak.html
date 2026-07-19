@@ -120,8 +120,9 @@
   let best = +(localStorage.getItem('ucak-yolcu-best') || 0);
 
   function newAirport(num) {
+    // havalimanları arası ~2 km (1900-2200 m)
     airport = {
-      z: distance + 110 + Math.random() * 90,
+      z: distance + 950 + Math.random() * 150,
       x: (Math.random() * 1.6 - 0.8),
       num,
       done: false,
