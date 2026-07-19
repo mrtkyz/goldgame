@@ -113,6 +113,7 @@
   let boss = null;
   let score = 0, lives = 3, wave = 0, toSpawn = 0, spawnT = 0, fireT = 0, waveT = 0;
   let invTimer = 0, flashTimer = 0, shieldT = 0, rapidT = 0;
+  let invShield = 0, invRapid = 0;      // envanterdeki yedek güçler
   let bannerText = '';
   let best = +(localStorage.getItem('uzay-best') || 0);
 
@@ -132,6 +133,7 @@
     score = 0; lives = 3; wave = 0;
     toSpawn = 0; spawnT = 0; fireT = 0; waveT = 0;
     invTimer = 0; flashTimer = 0; shieldT = 0; rapidT = 0;
+    invShield = 0; invRapid = 0;
     player.x = W / 2; player.y = H - 110;
     nextWave();
     state = STATE.PLAYING;
@@ -216,6 +218,10 @@
     if ((state === STATE.MENU || state === STATE.OVER) &&
         (e.key === ' ' || e.key === 'Enter')) { startGame(); e.preventDefault(); return; }
     keys[e.key] = true;
+    if (state === STATE.PLAYING && !paused) {
+      if (e.key === 'q' || e.key === 'Q') useShield();
+      if (e.key === 'e' || e.key === 'E') useRapid();
+    }
     if ([' ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) e.preventDefault();
   });
   addEventListener('keyup', e => keys[e.key] = false);
@@ -228,9 +234,17 @@
       y: (e.clientY - r.top) / r.height * H,
     };
   }
+  // Envanter düğmeleri (alt köşeler)
+  const BTN = { s: 60, m: 12 };
+  const shieldBtn = () => ({ x: BTN.m, y: H - BTN.s - BTN.m, w: BTN.s, h: BTN.s });
+  const rapidBtn = () => ({ x: W - BTN.s - BTN.m, y: H - BTN.s - BTN.m, w: BTN.s, h: BTN.s });
+  const inBtn = (p, b) => p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
+
   canvas.addEventListener('pointerdown', e => {
     if (state !== STATE.PLAYING) { startGame(); return; }
     const p = pointerPos(e);
+    if (inBtn(p, shieldBtn())) { useShield(); return; }
+    if (inBtn(p, rapidBtn())) { useRapid(); return; }
     pointerX = p.x; pointerY = p.y;
   });
   canvas.addEventListener('pointermove', e => {
@@ -501,14 +515,30 @@
       if (pu.y > H + 30) { powerups.splice(i, 1); continue; }
       if (Math.hypot(pu.x - player.x, pu.y - player.y) < 30) {
         if (pu.type === 'kalkan') {
-          shieldT = 7;
-          addFloater(player.x, player.y - 40, 'KALKAN!', '#4fc9f0');
+          if (shieldT <= 0) {
+            shieldT = 7;
+            addFloater(player.x, player.y - 40, 'KALKAN!', '#4fc9f0');
+          } else if (invShield < 3) {
+            invShield++;
+            addFloater(player.x, player.y - 40, 'KALKAN YEDEKTE +1', '#4fc9f0');
+          } else {
+            score += 25;
+            addFloater(player.x, player.y - 40, '+25', '#ffd54a');
+          }
         } else if (pu.type === 'can') {
           lives = Math.min(5, lives + 1);
           addFloater(player.x, player.y - 40, '+1 CAN', '#ff5d8f');
         } else {
-          rapidT = 7;
-          addFloater(player.x, player.y - 40, 'ÇİFT LAZER!', '#7fff9e');
+          if (rapidT <= 0) {
+            rapidT = 7;
+            addFloater(player.x, player.y - 40, 'ÇİFT LAZER!', '#7fff9e');
+          } else if (invRapid < 3) {
+            invRapid++;
+            addFloater(player.x, player.y - 40, 'LAZER YEDEKTE +1', '#7fff9e');
+          } else {
+            score += 25;
+            addFloater(player.x, player.y - 40, '+25', '#ffd54a');
+          }
         }
         sndPower();
         powerups.splice(i, 1);
@@ -558,6 +588,28 @@
     for (const st of stars) {
       st.y += st.s * 60 * dt;
       if (st.y > H) { st.y = -2; st.x = Math.random() * W; }
+    }
+  }
+
+  const sndDeny = () => beep(160, 0.12, 'sawtooth', 0.06);
+  function useShield() {
+    if (invShield > 0 && shieldT <= 0) {
+      invShield--;
+      shieldT = 7;
+      addFloater(player.x, player.y - 40, 'KALKAN!', '#4fc9f0');
+      sndPower();
+    } else {
+      sndDeny();
+    }
+  }
+  function useRapid() {
+    if (invRapid > 0 && rapidT <= 0) {
+      invRapid--;
+      rapidT = 7;
+      addFloater(player.x, player.y - 40, 'ÇİFT LAZER!', '#7fff9e');
+      sndPower();
+    } else {
+      sndDeny();
     }
   }
 
@@ -920,6 +972,59 @@
       ctx.font = 'bold 13px sans-serif';
       ctx.fillText('ÇİFT LAZER ' + Math.ceil(rapidT), gx, 66);
     }
+    drawItemButtons();
+  }
+
+  function drawItemButton(b, count, active, color, drawIcon, label) {
+    const usable = count > 0 && !active;
+    ctx.save();
+    ctx.globalAlpha = usable ? 1 : 0.45;
+    ctx.fillStyle = 'rgba(15, 15, 40, 0.8)';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = usable ? 3 : 1.5;
+    ctx.beginPath();
+    ctx.arc(b.x + b.w / 2, b.y + b.h / 2, b.w / 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    drawIcon(b.x + b.w / 2, b.y + b.h / 2 - 3);
+    // adet rozeti
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = count > 0 ? color : '#555a70';
+    ctx.beginPath();
+    ctx.arc(b.x + b.w - 8, b.y + 8, 11, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#0a0a1e';
+    ctx.font = 'bold 13px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(count, b.x + b.w - 8, b.y + 9);
+    // etiket
+    ctx.fillStyle = color;
+    ctx.font = 'bold 10px sans-serif';
+    ctx.fillText(label, b.x + b.w / 2, b.y + b.h - 11);
+    ctx.restore();
+  }
+
+  function drawItemButtons() {
+    const sb = shieldBtn();
+    drawItemButton(sb, invShield, shieldT > 0, '#4fc9f0', (cx, cy) => {
+      ctx.fillStyle = '#4fc9f0';
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - 9);
+      ctx.lineTo(cx + 8, cy - 5);
+      ctx.lineTo(cx + 7, cy + 4);
+      ctx.lineTo(cx, cy + 10);
+      ctx.lineTo(cx - 7, cy + 4);
+      ctx.lineTo(cx - 8, cy - 5);
+      ctx.closePath();
+      ctx.fill();
+    }, 'Q');
+    const rb = rapidBtn();
+    drawItemButton(rb, invRapid, rapidT > 0, '#7fff9e', (cx, cy) => {
+      ctx.fillStyle = '#7fff9e';
+      ctx.fillRect(cx - 7, cy - 9, 5, 18);
+      ctx.fillRect(cx + 2, cy - 9, 5, 18);
+    }, 'E');
   }
 
   function drawCenteredPanel(lines) {
@@ -1015,6 +1120,8 @@
         ['Dalgalar ilerledikçe yeni canlılar gelir:', 15, '#aaa'],
         ['UFO, ahtapot, yarasa, yengeç, dev göz...', 15, '#aaa'],
         ['Düşenlerden kalkan, can ve çift lazer topla', 15, '#4fc9f0'],
+        ['Fazla güçler yedeğe girer: köşe düğmeleri', 15, '#4fc9f0'],
+        ['veya Q (kalkan) / E (lazer) ile kullan', 15, '#4fc9f0'],
         ['Her 10. dalgada dev BOSS gelir!', 15, '#ff6b5e'],
         ['Ok tuşları / WASD veya parmağınla sürükle', 15, '#aaa'],
         ['Başlamak için tıkla veya SPACE', 19, '#ffd54a'],
