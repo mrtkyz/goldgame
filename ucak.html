@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Uçak Sürüşü</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    background: #12283f;
+    font-family: 'Segoe UI', Tahoma, Verdana, sans-serif;
+    overflow: hidden;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  #wrap {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #game {
+    display: block;
+    border-radius: 12px;
+    box-shadow: 0 0 40px rgba(140, 200, 255, 0.3);
+    max-width: 100vw;
+    max-height: 100vh;
+  }
+
+  #back {
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    z-index: 10;
+    color: #a8d8ff;
+    background: rgba(12, 28, 48, 0.75);
+    border: 1px solid rgba(168, 216, 255, 0.4);
+    border-radius: 20px;
+    padding: 6px 14px;
+    font-size: 14px;
+    text-decoration: none;
+  }
+
+  /* Ayarlar menüsü */
+  #settings {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+  }
+  #settings button {
+    border: 2px solid rgba(168, 216, 255, 0.5);
+    background: rgba(12, 28, 48, 0.85);
+    color: #a8d8ff;
+    border-radius: 999px;
+    font-size: 16px;
+    padding: 10px 18px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #gear {
+    width: 46px;
+    height: 46px;
+    padding: 0 !important;
+    font-size: 24px;
+    border-radius: 50% !important;
+  }
+  #menu { display: flex; flex-direction: column; gap: 8px; }
+  #menu.hidden { display: none; }
+</style>
+</head>
+<body>
+<a id="back" href="index.html">← Oyunlar</a>
+<div id="settings">
+  <button id="gear" aria-label="Ayarlar">⚙</button>
+  <div id="menu" class="hidden">
+    <button id="btnPause">⏸ Durdur</button>
+    <button id="btnStart">▶ Başlat</button>
+    <button id="btnExit">✕ Çık</button>
+  </div>
+</div>
+<div id="wrap"><canvas id="game" width="480" height="720"></canvas></div>
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  const HORIZON = 250;
+  const SIDE = 300;            // dünya yatay kaydırma ölçeği
+  const ALT = 300;             // irtifanın ekrandaki ölçeği
+
+  function fit() {
+    const scale = Math.min(innerWidth / W, innerHeight / H);
+    canvas.style.width = (W * scale) + 'px';
+    canvas.style.height = (H * scale) + 'px';
+  }
+  addEventListener('resize', fit);
+  fit();
+
+  // ---- Oyun durumu ----
+  const STATE = { MENU: 0, PLAYING: 1 };
+  let state = STATE.MENU;
+  let paused = false;
+
+  let distance, playerX, playerH, rings, clouds, balloons, houses;
+  let nextRingZ, nextCloudZ, nextBalloonZ, nextHouseZ;
+  let score, streak, speed;
+  let best = +(localStorage.getItem('ucak-best') || 0);
+
+  function resetWorld() {
+    distance = 0; playerX = 0; playerH = 0.8;
+    rings = []; clouds = []; balloons = []; houses = [];
+    nextRingZ = 20; nextCloudZ = 6; nextBalloonZ = 30; nextHouseZ = 4;
+    score = 0; streak = 0; speed = 14;
+    seed();
+  }
+  function seed() {
+    while (nextCloudZ < 50) spawnCloud();
+    while (nextHouseZ < 50) spawnHouse();
+  }
+  function spawnRing() {
+    rings.push({
+      z: nextRingZ,
+      x: (Math.random() * 2 - 1) * 0.9,
+      h: 0.35 + Math.random() * 1.0,
+      counted: false,
+      hit: false,
+      hitT: 0,
+    });
+    nextRingZ += 8 + Math.random() * 8;
+  }
+  function spawnCloud() {
+    clouds.push({
+      z: nextCloudZ,
+      x: (Math.random() * 2 - 1) * 1.6,
+      h: 0.9 + Math.random() * 0.9,
+      s: 0.7 + Math.random() * 0.8,
+    });
+    nextCloudZ += 5 + Math.random() * 6;
+  }
+  function spawnBalloon() {
+    balloons.push({
+      z: nextBalloonZ,
+      x: (Math.random() < 0.5 ? -1 : 1) * (0.9 + Math.random() * 0.8),
+      h: 0.5 + Math.random() * 0.8,
+      col: ['#e74c3c', '#f1c40f', '#9b59b6', '#2ecc71'][Math.floor(Math.random() * 4)],
+      seed: Math.random() * 10,
+    });
+    nextBalloonZ += 25 + Math.random() * 25;
+  }
+  function spawnHouse() {
+    houses.push({
+      z: nextHouseZ,
+      x: (Math.random() < 0.5 ? -1 : 1) * (0.7 + Math.random() * 1.2),
+      tree: Math.random() < 0.5,
+    });
+    nextHouseZ += 3.5 + Math.random() * 4;
+  }
+
+  resetWorld();
+
+  function startGame() {
+    resetWorld();
+    state = STATE.PLAYING;
+    paused = false;
+    sndStart();
+  }
+
+  // ---- Sesler ----
+  let audioCtx = null;
+  function getAudio() {
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      return audioCtx;
+    } catch (e) { return null; }
+  }
+  function beep(freq, dur, type = 'sine', vol = 0.15, delay = 0) {
+    const ac = getAudio();
+    if (!ac) return;
+    const t0 = ac.currentTime + delay;
+    const o = ac.createOscillator();
+    const g = ac.createGain();
+    o.type = type;
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+    o.connect(g).connect(ac.destination);
+    o.start(t0);
+    o.stop(t0 + dur);
+  }
+  const sndStart = () => { beep(120, 0.4, 'sawtooth', 0.12); beep(180, 0.35, 'sawtooth', 0.1, 0.3); };
+  const sndRing = () => { beep(880, 0.12, 'triangle', 0.15); beep(1175, 0.18, 'triangle', 0.15, 0.09); };
+  const sndStreak = () => { beep(880, 0.1, 'triangle', 0.14); beep(1109, 0.1, 'triangle', 0.14, 0.08); beep(1319, 0.16, 'triangle', 0.14, 0.16); };
+  const sndMiss = () => beep(300, 0.2, 'triangle', 0.06);
+
+  // ---- Girdi ----
+  const keys = {};
+  addEventListener('keydown', e => {
+    if (state === STATE.MENU && (e.key === ' ' || e.key === 'Enter')) { startGame(); e.preventDefault(); return; }
+    keys[e.key] = true;
+    if ([' ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) e.preventDefault();
+  });
+  addEventListener('keyup', e => keys[e.key] = false);
+
+  let pointerX = null, pointerY = null;
+  function pointerPos(e) {
+    const r = canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - r.left) / r.width * W,
+      y: (e.clientY - r.top) / r.height * H,
+    };
+  }
+  canvas.addEventListener('pointerdown', e => {
+    if (state !== STATE.PLAYING) { startGame(); return; }
+    const p = pointerPos(e);
+    pointerX = p.x; pointerY = p.y;
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (pointerX !== null) {
+      const p = pointerPos(e);
+      pointerX = p.x; pointerY = p.y;
+    }
+  });
+  addEventListener('pointerup', () => { pointerX = null; pointerY = null; });
+
+  // Ayarlar menüsü
+  const menuEl = document.getElementById('menu');
+  document.getElementById('gear').addEventListener('click', () => {
+    menuEl.classList.toggle('hidden');
+  });
+  document.getElementById('btnPause').addEventListener('click', () => {
+    if (state === STATE.PLAYING) paused = true;
+    menuEl.classList.add('hidden');
+  });
+  document.getElementById('btnStart').addEventListener('click', () => {
+    if (state !== STATE.PLAYING) startGame();
+    paused = false;
+    menuEl.classList.add('hidden');
+  });
+  document.getElementById('btnExit').addEventListener('click', () => {
+    location.href = 'index.html';
+  });
+
+  // Uçağın ekrandaki konumu: halkalarla aynı perspektif formülü
+  const planeScreen = () => ({
+    x: W / 2 + playerX * 30,
+    y: H - 14 - playerH * ALT,
+  });
+
+  // ---- Güncelleme ----
+  let steerX = 0, steerY = 0;   // görsel yatış için
+  function update(dt) {
+    if (state !== STATE.PLAYING || paused) return;
+
+    // Kontrol: 4 yön (klavye) veya parmak takibi
+    let dx = 0, dy = 0;
+    if (pointerX !== null) {
+      const ps = planeScreen();
+      const diffX = pointerX - ps.x;
+      const diffY = (pointerY - 50) - ps.y;
+      dx = Math.abs(diffX) > 10 ? Math.sign(diffX) * Math.min(1, Math.abs(diffX) / 60) : 0;
+      dy = Math.abs(diffY) > 10 ? Math.sign(diffY) * Math.min(1, Math.abs(diffY) / 60) : 0;
+    } else {
+      if (keys['ArrowLeft'] || keys['a'] || keys['A']) dx = -1;
+      if (keys['ArrowRight'] || keys['d'] || keys['D']) dx = 1;
+      if (keys['ArrowUp'] || keys['w'] || keys['W']) dy = -1;
+      if (keys['ArrowDown'] || keys['s'] || keys['S']) dy = 1;
+    }
+    steerX += (dx - steerX) * dt * 6;
+    steerY += (dy - steerY) * dt * 6;
+    playerX += dx * 1.6 * dt;
+    playerH -= dy * 1.1 * dt;
+    playerX = Math.max(-1.3, Math.min(1.3, playerX));
+    playerH = Math.max(0.15, Math.min(1.5, playerH));
+
+    distance += speed * dt;
+
+    // Dünya üretimi
+    while (nextRingZ < distance + 55) spawnRing();
+    while (nextCloudZ < distance + 55) spawnCloud();
+    while (nextBalloonZ < distance + 60) spawnBalloon();
+    while (nextHouseZ < distance + 55) spawnHouse();
+
+    // Halka geçişleri
+    for (let i = rings.length - 1; i >= 0; i--) {
+      const rg = rings[i];
+      const zRel = rg.z - distance + 1;
+      if (!rg.counted && zRel < 1.06) {
+        rg.counted = true;
+        if (Math.abs(rg.x - playerX) < 0.42 && Math.abs(rg.h - playerH) < 0.34) {
+          rg.hit = true;
+          rg.hitT = 0.6;
+          streak++;
+          const bonus = Math.min(50, (streak - 1) * 5);
+          score += 10 + bonus;
+          if (streak >= 3) sndStreak(); else sndRing();
+          if (score > best) {
+            best = score;
+            localStorage.setItem('ucak-best', best);
+          }
+        } else {
+          streak = 0;
+          sndMiss();
+        }
+      }
+      if (rg.hitT > 0) rg.hitT -= dt;
+      if (zRel < 0.5) rings.splice(i, 1);
+    }
+    clouds = clouds.filter(c => c.z - distance + 1 > 0.4);
+    balloons = balloons.filter(b => b.z - distance + 1 > 0.4);
+    houses = houses.filter(h => h.z - distance + 1 > 0.5);
+  }
+
+  // ---- Çizim ----
+  const rowCenter = f => W / 2 - playerX * SIDE * f;
+  const flyY = (f, h) => HORIZON + f * (H - HORIZON) - h * ALT * f;
+
+  function drawSky() {
+    const t = performance.now() / 1000;
+    const g = ctx.createLinearGradient(0, 0, 0, HORIZON);
+    g.addColorStop(0, '#4aa3e8');
+    g.addColorStop(1, '#cfe8f7');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, HORIZON);
+    // güneş
+    ctx.beginPath();
+    ctx.arc(W * 0.22, 66, 30, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffe89a';
+    ctx.fill();
+    // uzak dağlar
+    ctx.fillStyle = '#89a8c4';
+    for (const [mx, mw, mh] of [[-40, 240, 70], [180, 280, 95], [360, 220, 65]]) {
+      ctx.beginPath();
+      ctx.moveTo(mx, HORIZON);
+      ctx.lineTo(mx + mw / 2, HORIZON - mh);
+      ctx.lineTo(mx + mw, HORIZON);
+      ctx.closePath();
+      ctx.fill();
+    }
+    // uzak bulut şeridi
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    for (const [bx, by, br] of [[100, 120, 18], [300, 100, 22], [440, 130, 16]]) {
+      const x = (bx + t * 4) % (W + 60) - 30;
+      ctx.beginPath();
+      ctx.ellipse(x, by, br * 1.7, br * 0.6, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // kuş sürüsü
+    ctx.strokeStyle = '#3a4a5a';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+      const x = ((W * 0.6 + i * 30 + t * 15) % (W + 60)) - 30;
+      const y = 150 + i * 12;
+      const flap = Math.sin(t * 7 + i) * 4;
+      ctx.beginPath();
+      ctx.moveTo(x - 7, y);
+      ctx.quadraticCurveTo(x - 3, y - flap, x, y);
+      ctx.quadraticCurveTo(x + 3, y - flap, x + 7, y);
+      ctx.stroke();
+    }
+  }
+
+  function drawGround() {
+    for (let sy = HORIZON; sy < H; sy++) {
+      const f = (sy - HORIZON) / (H - HORIZON);
+      const z = distance + 1 / Math.max(f, 0.02);
+      // tarla şeritleri + ara sıra nehir
+      const zi = Math.floor(z * 1.3);
+      const isRiver = (zi % 41) === 20;
+      const band = zi % 3;
+      ctx.fillStyle = isRiver ? '#3d8fd1' : band === 0 ? '#57a05c' : band === 1 ? '#4c8f51' : '#b8a04e';
+      ctx.fillRect(0, sy, W, 1);
+    }
+  }
+
+  function drawRing(rg, x, y, sc) {
+    const rr = 68 * sc;
+    ctx.save();
+    // halka: turuncu çember, geçilince yeşil parlar
+    ctx.lineWidth = Math.max(3, 10 * sc);
+    ctx.strokeStyle = rg.hitT > 0 ? '#7fff9e' : '#ffb020';
+    if (rg.hitT > 0) {
+      ctx.shadowColor = '#7fff9e';
+      ctx.shadowBlur = 25;
+    }
+    ctx.beginPath();
+    ctx.ellipse(x, y, rr * 0.85, rr, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    // iç çizgi
+    ctx.lineWidth = Math.max(1.5, 4 * sc);
+    ctx.strokeStyle = rg.hitT > 0 ? '#c8ffd8' : '#ffd54a';
+    ctx.beginPath();
+    ctx.ellipse(x, y, rr * 0.7, rr * 0.84, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    // bayrak süsleri
+    ctx.fillStyle = '#e74c3c';
+    for (const a of [-0.5, 0.5, Math.PI - 0.5, Math.PI + 0.5]) {
+      ctx.beginPath();
+      ctx.arc(x + Math.cos(a) * rr * 0.85, y + Math.sin(a) * rr, Math.max(2, 5 * sc), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawCloudSprite(x, y, sc, s) {
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.beginPath();
+    ctx.ellipse(x, y, 60 * sc * s.s, 22 * sc * s.s, 0, 0, Math.PI * 2);
+    ctx.ellipse(x + 34 * sc * s.s, y + 6 * sc * s.s, 40 * sc * s.s, 16 * sc * s.s, 0, 0, Math.PI * 2);
+    ctx.ellipse(x - 34 * sc * s.s, y + 7 * sc * s.s, 36 * sc * s.s, 15 * sc * s.s, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawBalloonSprite(b, x, y, sc, t) {
+    const bob = Math.sin(t * 1.5 + b.seed) * 6 * sc;
+    ctx.fillStyle = b.col;
+    ctx.beginPath();
+    ctx.ellipse(x, y - 40 * sc + bob, 30 * sc, 36 * sc, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.beginPath();
+    ctx.ellipse(x - 9 * sc, y - 46 * sc + bob, 8 * sc, 18 * sc, -0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#5a4632';
+    ctx.lineWidth = 2 * sc;
+    ctx.beginPath();
+    ctx.moveTo(x - 12 * sc, y - 10 * sc + bob); ctx.lineTo(x - 8 * sc, y + 8 * sc + bob);
+    ctx.moveTo(x + 12 * sc, y - 10 * sc + bob); ctx.lineTo(x + 8 * sc, y + 8 * sc + bob);
+    ctx.stroke();
+    ctx.fillStyle = '#8d5a2b';
+    ctx.fillRect(x - 10 * sc, y + 6 * sc + bob, 20 * sc, 12 * sc);
+  }
+
+  function drawHouseSprite(s, x, y, sc) {
+    if (s.tree) {
+      ctx.fillStyle = '#6b4a26';
+      ctx.fillRect(x - 4 * sc, y - 26 * sc, 8 * sc, 26 * sc);
+      ctx.fillStyle = '#2f8f43';
+      ctx.beginPath();
+      ctx.arc(x, y - 34 * sc, 18 * sc, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.fillStyle = '#e8dcc8';
+      ctx.fillRect(x - 20 * sc, y - 26 * sc, 40 * sc, 26 * sc);
+      ctx.fillStyle = '#c0533a';
+      ctx.beginPath();
+      ctx.moveTo(x - 25 * sc, y - 26 * sc);
+      ctx.lineTo(x, y - 42 * sc);
+      ctx.lineTo(x + 25 * sc, y - 26 * sc);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#7a5a3a';
+      ctx.fillRect(x - 5 * sc, y - 14 * sc, 10 * sc, 14 * sc);
+    }
+  }
+
+  function drawSprites() {
+    const t = performance.now() / 1000;
+    const sprites = [
+      ...houses.map(s => ({ z: s.z, kind: 'house', s })),
+      ...clouds.map(s => ({ z: s.z, kind: 'cloud', s })),
+      ...balloons.map(s => ({ z: s.z, kind: 'balloon', s })),
+      ...rings.map(s => ({ z: s.z, kind: 'ring', s })),
+    ].sort((a, b) => b.z - a.z);
+
+    for (const sp of sprites) {
+      const zRel = sp.z - distance + 1;
+      if (zRel < 0.4) continue;
+      const f = 1 / zRel;
+      if (f > 1.15 || f < 0.03) continue;
+      const fc = Math.min(f, 1.15);
+      const s = sp.s;
+      if (sp.kind === 'house') {
+        const y = HORIZON + fc * (H - HORIZON);
+        const x = rowCenter(fc) + s.x * SIDE * fc;
+        drawHouseSprite(s, x, y, fc);
+      } else {
+        const y = flyY(fc, s.h);
+        const x = rowCenter(fc) + s.x * SIDE * fc;
+        if (sp.kind === 'cloud') drawCloudSprite(x, y, fc, s);
+        else if (sp.kind === 'balloon') drawBalloonSprite(s, x, y, fc, t);
+        else drawRing(s, x, y, fc);
+      }
+    }
+  }
+
+  function drawPlane() {
+    const t = performance.now() / 1000;
+    const ps = planeScreen();
+    const x = ps.x, y = ps.y + Math.sin(t * 2.2) * 3;
+    const bank = steerX * 0.35;
+
+    // yerdeki gölge (irtifaya göre küçülür ve soluklaşır)
+    const shScale = 1.15 - playerH * 0.45;
+    ctx.fillStyle = 'rgba(0,0,0,' + (0.3 - playerH * 0.13) + ')';
+    ctx.beginPath();
+    ctx.ellipse(x, H - 26, 55 * shScale, 8 * shScale, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(bank);
+
+    // pervane bulanıklığı (burnun iki yanından taşar)
+    ctx.fillStyle = 'rgba(200,210,220,0.35)';
+    ctx.beginPath();
+    ctx.ellipse(0, -6, 46, 7 + Math.abs(Math.sin(t * 40)) * 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // ana kanatlar
+    const wg = ctx.createLinearGradient(-90, 0, 90, 0);
+    wg.addColorStop(0, '#d8d2c2');
+    wg.addColorStop(0.5, '#f5f0e2');
+    wg.addColorStop(1, '#d8d2c2');
+    ctx.fillStyle = wg;
+    ctx.beginPath();
+    ctx.moveTo(-95, 6 + steerY * 6);
+    ctx.lineTo(-14, -2);
+    ctx.lineTo(14, -2);
+    ctx.lineTo(95, 6 + steerY * 6);
+    ctx.lineTo(90, 14 + steerY * 6);
+    ctx.lineTo(-90, 14 + steerY * 6);
+    ctx.closePath();
+    ctx.fill();
+    // kanat uçları kırmızı
+    ctx.fillStyle = '#d64545';
+    ctx.fillRect(-95, 5 + steerY * 6, 14, 9);
+    ctx.fillRect(81, 5 + steerY * 6, 14, 9);
+
+    // gövde
+    const bg = ctx.createLinearGradient(-14, 0, 14, 0);
+    bg.addColorStop(0, '#b8432c');
+    bg.addColorStop(0.5, '#e05540');
+    bg.addColorStop(1, '#b8432c');
+    ctx.fillStyle = bg;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 15, 22, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // kuyruk: dikey kanatçık
+    ctx.fillStyle = '#d64545';
+    ctx.beginPath();
+    ctx.moveTo(-3, -4);
+    ctx.lineTo(0, -34 - steerY * 5);
+    ctx.lineTo(6, -32 - steerY * 5);
+    ctx.lineTo(7, -4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#f5f0e2';
+    ctx.fillRect(0, -30 - steerY * 5, 5, 9);
+    // yatay kuyruk kanatları
+    ctx.fillStyle = '#e8e0cc';
+    ctx.fillRect(-34, -8, 26, 7);
+    ctx.fillRect(8, -8, 26, 7);
+
+    // kokpit
+    ctx.fillStyle = '#4fc9f0';
+    ctx.beginPath();
+    ctx.ellipse(0, -12, 8, 6, 0, Math.PI, 0);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  function drawHUD() {
+    ctx.fillStyle = 'rgba(12, 28, 48, 0.55)';
+    ctx.fillRect(0, 0, W, 58);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffd54a';
+    ctx.font = 'bold 24px sans-serif';
+    ctx.fillText(score, 118, 22);
+    ctx.fillStyle = '#a8d8ff';
+    ctx.font = '15px sans-serif';
+    ctx.fillText('Mesafe: ' + Math.floor(distance * 2) + ' m   Rekor: ' + best, 118, 45);
+    if (streak >= 2) {
+      ctx.fillStyle = '#7fff9e';
+      ctx.font = 'bold 16px sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText('SERİ x' + streak, W - 16, 24);
+    }
+  }
+
+  function drawCenteredPanel(lines) {
+    ctx.fillStyle = 'rgba(8, 20, 36, 0.78)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    let y = H * 0.28;
+    for (const [text, size, color] of lines) {
+      ctx.fillStyle = color;
+      ctx.font = 'bold ' + size + 'px sans-serif';
+      ctx.fillText(text, W / 2, y);
+      y += size * 1.6;
+    }
+  }
+
+  // ---- Ana döngü ----
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    update(dt);
+
+    drawSky();
+    drawGround();
+    drawSprites();
+    drawPlane();
+    if (state !== STATE.MENU) drawHUD();
+
+    if (state === STATE.MENU) {
+      drawCenteredPanel([
+        ['UÇAK SÜRÜŞÜ', 44, '#a8d8ff'],
+        ['', 12, '#fff'],
+        ['Gökyüzünde özgürce uç!', 20, '#ddd'],
+        ['Altın halkaların içinden geç: +10 puan', 16, '#ffb020'],
+        ['Üst üste geçersen seri bonusu kazan!', 16, '#7fff9e'],
+        ['Alçal, yüksel, sağa sola süzül', 16, '#aaa'],
+        ['Ok tuşları / WASD veya parmağınla sürükle', 16, '#aaa'],
+        ['Başlamak için tıkla veya SPACE', 19, '#ffd54a'],
+      ]);
+    } else if (paused && state === STATE.PLAYING) {
+      drawCenteredPanel([
+        ['DURAKLATILDI', 40, '#ffd54a'],
+        ['', 10, '#fff'],
+        ['Devam etmek için Ayarlar > Başlat', 18, '#ddd'],
+      ]);
+    }
+
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
