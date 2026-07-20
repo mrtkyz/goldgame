@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Penaltı</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    background: #10240f;
+    font-family: 'Segoe UI', Tahoma, Verdana, sans-serif;
+    overflow: hidden;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  #wrap {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #game {
+    display: block;
+    border-radius: 12px;
+    box-shadow: 0 0 40px rgba(140, 230, 120, 0.25);
+    max-width: 100vw;
+    max-height: 100vh;
+  }
+
+  #back {
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    z-index: 10;
+    color: #9fe89a;
+    background: rgba(12, 26, 10, 0.75);
+    border: 1px solid rgba(159, 232, 154, 0.4);
+    border-radius: 20px;
+    padding: 6px 14px;
+    font-size: 14px;
+    text-decoration: none;
+  }
+
+  /* Ayarlar menüsü */
+  #settings {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+  }
+  #settings button {
+    border: 2px solid rgba(159, 232, 154, 0.5);
+    background: rgba(12, 26, 10, 0.85);
+    color: #9fe89a;
+    border-radius: 999px;
+    font-size: 16px;
+    padding: 10px 18px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #gear {
+    width: 46px;
+    height: 46px;
+    padding: 0 !important;
+    font-size: 24px;
+    border-radius: 50% !important;
+  }
+  #menu { display: flex; flex-direction: column; gap: 8px; }
+  #menu.hidden { display: none; }
+</style>
+</head>
+<body>
+<a id="back" href="index.html">← Oyunlar</a>
+<div id="settings">
+  <button id="gear" aria-label="Ayarlar">⚙</button>
+  <div id="menu" class="hidden">
+    <button id="btnStart">▶ Yeni Oyun</button>
+    <button id="btnExit">✕ Çık</button>
+  </div>
+</div>
+<div id="wrap"><canvas id="game" width="480" height="720"></canvas></div>
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  // Kale geometrisi
+  const GOAL = { x: W / 2, y: 208, w: 350, h: 138 };
+  const BALL_START = { x: W / 2, y: 596 };
+
+  function fit() {
+    const scale = Math.min(innerWidth / W, innerHeight / H);
+    canvas.style.width = (W * scale) + 'px';
+    canvas.style.height = (H * scale) + 'px';
+  }
+  addEventListener('resize', fit);
+  fit();
+
+  // ---- Oyun durumu ----
+  // MENU -> AIM (hedef bekleniyor) -> FLY (top uçuyor) -> RESULT -> ... -> ROUND (tur özeti) -> OVER
+  const STATE = { MENU: 0, AIM: 1, FLY: 2, RESULT: 3, ROUND: 4, OVER: 5 };
+  let state = STATE.MENU;
+
+  let level = 1, shots = [], goals = 0, totalGoals = 0;   // shots: 'gol'|'kurtardi'|'aut'
+  let flyT = 0, shotTarget = null, shotResult = '', resultT = 0;
+  let keeper = { dive: null, diveT: 0 };
+  let best = +(localStorage.getItem('penalti-best') || 0);
+
+  function resetGame() {
+    level = 1; totalGoals = 0;
+    startRound();
+  }
+  function startRound() {
+    shots = []; goals = 0;
+    keeper = { dive: null, diveT: 0 };
+    state = STATE.AIM;
+    sndWhistle();
+  }
+
+  // ---- Sesler ----
+  let audioCtx = null;
+  function getAudio() {
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      return audioCtx;
+    } catch (e) { return null; }
+  }
+  function beep(freq, dur, type = 'sine', vol = 0.15, delay = 0) {
+    const ac = getAudio();
+    if (!ac) return;
+    const t0 = ac.currentTime + delay;
+    const o = ac.createOscillator();
+    const g = ac.createGain();
+    o.type = type;
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+    o.connect(g).connect(ac.destination);
+    o.start(t0);
+    o.stop(t0 + dur);
+  }
+  const sndWhistle = () => { beep(2200, 0.12, 'square', 0.08); beep(2200, 0.25, 'square', 0.08, 0.18); };
+  const sndKick = () => beep(110, 0.12, 'sine', 0.3);
+  const sndGoal = () => { [523, 659, 784, 1047].forEach((f, i) => beep(f, 0.16, 'triangle', 0.15, i * 0.1)); };
+  const sndSave = () => { beep(300, 0.2, 'sawtooth', 0.12); beep(200, 0.3, 'sawtooth', 0.1, 0.15); };
+  const sndOut = () => beep(240, 0.35, 'triangle', 0.1);
+  const sndLevelUp = () => { [659, 784, 988, 1319].forEach((f, i) => beep(f, 0.18, 'triangle', 0.15, i * 0.12)); };
+
+  // ---- Girdi ----
+  function pointerPos(e) {
+    const r = canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - r.left) / r.width * W,
+      y: (e.clientY - r.top) / r.height * H,
+    };
+  }
+  canvas.addEventListener('pointerdown', e => {
+    const p = pointerPos(e);
+    if (state === STATE.MENU || state === STATE.OVER) { resetGame(); return; }
+    if (state === STATE.ROUND) {
+      // tur özeti: devam
+      if (goals >= 3) { level++; startRound(); }
+      return;
+    }
+    if (state !== STATE.AIM) return;
+    // sadece üst yarıya atış
+    if (p.y > 440) return;
+    shoot(p.x, p.y);
+  });
+  addEventListener('keydown', e => {
+    if ((state === STATE.MENU || state === STATE.OVER) && (e.key === ' ' || e.key === 'Enter')) {
+      resetGame();
+      e.preventDefault();
+    } else if (state === STATE.ROUND && (e.key === ' ' || e.key === 'Enter')) {
+      if (goals >= 3) { level++; startRound(); }
+      e.preventDefault();
+    }
+  });
+
+  // Ayarlar menüsü
+  const menuEl = document.getElementById('menu');
+  document.getElementById('gear').addEventListener('click', () => {
+    menuEl.classList.toggle('hidden');
+  });
+  document.getElementById('btnStart').addEventListener('click', () => {
+    resetGame();
+    menuEl.classList.add('hidden');
+  });
+  document.getElementById('btnExit').addEventListener('click', () => {
+    location.href = 'index.html';
+  });
+
+  // ---- Atış ----
+  function shoot(tx, ty) {
+    // hafif sapma: her atışta küçük rastgelelik
+    tx += (Math.random() - 0.5) * 22;
+    ty += (Math.random() - 0.5) * 16;
+    shotTarget = { x: tx, y: ty };
+    flyT = 0;
+    state = STATE.FLY;
+    sndKick();
+
+    // Kaleci kararı: seviye arttıkça daha akıllı ve daha uzun kollu
+    const guessProb = Math.min(0.72, 0.22 + level * 0.07);
+    const reach = 52 + level * 5;
+    let dtx;
+    const zones = [-1, -0.5, 0, 0.5, 1];
+    if (Math.random() < guessProb) {
+      // doğru tarafa uçar
+      dtx = Math.max(-1, Math.min(1, (tx - GOAL.x) / (GOAL.w / 2)));
+      dtx += (Math.random() - 0.5) * 0.25;
+    } else {
+      dtx = zones[Math.floor(Math.random() * zones.length)];
+    }
+    const dty = ty < GOAL.y + GOAL.h * 0.45 ? -0.7 : 0.2;  // üste mi alta mı
+    keeper.dive = {
+      tx: GOAL.x + dtx * (GOAL.w / 2 - 30),
+      ty: GOAL.y + GOAL.h - 46 + dty * 40,
+      reach,
+    };
+    keeper.diveT = 0;
+  }
+
+  function resolveShot() {
+    const t = shotTarget;
+    const inGoal =
+      t.x > GOAL.x - GOAL.w / 2 + 8 && t.x < GOAL.x + GOAL.w / 2 - 8 &&
+      t.y > GOAL.y + 6 && t.y < GOAL.y + GOAL.h - 4;
+    if (!inGoal) {
+      shotResult = 'aut';
+      sndOut();
+    } else if (keeper.dive &&
+               Math.hypot(t.x - keeper.dive.tx, t.y - keeper.dive.ty) < keeper.dive.reach) {
+      shotResult = 'kurtardi';
+      sndSave();
+    } else {
+      shotResult = 'gol';
+      goals++;
+      totalGoals++;
+      if (totalGoals > best) {
+        best = totalGoals;
+        localStorage.setItem('penalti-best', best);
+      }
+      sndGoal();
+    }
+    shots.push(shotResult);
+    resultT = 1.2;
+    state = STATE.RESULT;
+  }
+
+  // ---- Güncelleme ----
+  function update(dt) {
+    if (state === STATE.FLY) {
+      flyT += dt / 0.55;
+      keeper.diveT = Math.min(1, keeper.diveT + dt / 0.4);
+      if (flyT >= 1) {
+        flyT = 1;
+        resolveShot();
+      }
+    } else if (state === STATE.RESULT) {
+      resultT -= dt;
+      keeper.diveT = Math.min(1, keeper.diveT + dt / 0.4);
+      if (resultT <= 0) {
+        keeper.dive = null;
+        keeper.diveT = 0;
+        if (shots.length >= 5) {
+          if (goals >= 3) sndLevelUp();
+          state = STATE.ROUND;
+        } else {
+          state = STATE.AIM;
+        }
+      }
+    }
+  }
+
+  // ---- Çizim ----
+  function drawStadium() {
+    const t = performance.now() / 1000;
+    // gökyüzü
+    const g = ctx.createLinearGradient(0, 0, 0, 150);
+    g.addColorStop(0, '#4aa3e8');
+    g.addColorStop(1, '#a8d4ee');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, 150);
+    // tribün
+    ctx.fillStyle = '#3a4358';
+    ctx.fillRect(0, 60, W, 90);
+    // seyirciler (renkli noktalar, dalgalanır)
+    for (let r = 0; r < 5; r++) {
+      for (let c = 0; c < 30; c++) {
+        const cols = ['#e74c3c', '#f1c40f', '#3498db', '#2ecc71', '#e67e22', '#ecf0f1', '#ff6b9d'];
+        const col = cols[(r * 7 + c * 3) % cols.length];
+        const wave = Math.sin(t * 2 + c * 0.4 + r) * 2;
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.arc(8 + c * 16.3, 74 + r * 16 + wave, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    // pano
+    ctx.fillStyle = '#14181d';
+    ctx.fillRect(W / 2 - 120, 34, 240, 26);
+    ctx.fillStyle = '#ffd54a';
+    ctx.font = 'bold 16px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('★ TALHA STADI ★', W / 2, 47);
+
+    // saha: çim şeritleri
+    for (let y = 150; y < H; y += 2) {
+      const band = Math.floor((y - 150) / 45) % 2;
+      ctx.fillStyle = band ? '#4f9e55' : '#489350';
+      ctx.fillRect(0, y, W, 2);
+    }
+    // ceza sahası çizgileri
+    ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(30, 480);
+    ctx.lineTo(70, 355);
+    ctx.lineTo(W - 70, 355);
+    ctx.lineTo(W - 30, 480);
+    ctx.stroke();
+    // penaltı noktası
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.beginPath();
+    ctx.ellipse(BALL_START.x, BALL_START.y + 16, 7, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawGoal() {
+    const L = GOAL.x - GOAL.w / 2, R = GOAL.x + GOAL.w / 2;
+    const T = GOAL.y, B = GOAL.y + GOAL.h;
+    // file
+    ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 14; i++) {
+      const x = L + (i / 14) * GOAL.w;
+      ctx.beginPath();
+      ctx.moveTo(x, T);
+      ctx.lineTo(L + 14 + (i / 14) * (GOAL.w - 28), B);
+      ctx.stroke();
+    }
+    for (let i = 0; i <= 6; i++) {
+      const y = T + (i / 6) * GOAL.h;
+      ctx.beginPath();
+      ctx.moveTo(L + (i / 6) * 10, y);
+      ctx.lineTo(R - (i / 6) * 10, y);
+      ctx.stroke();
+    }
+    // direkler
+    ctx.strokeStyle = '#f5f5f5';
+    ctx.lineWidth = 7;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(L, B);
+    ctx.lineTo(L, T);
+    ctx.lineTo(R, T);
+    ctx.lineTo(R, B);
+    ctx.stroke();
+  }
+
+  function drawKeeper() {
+    let kx = GOAL.x, ky = GOAL.y + GOAL.h - 46, lean = 0, stretch = 0;
+    const t = performance.now() / 1000;
+    if (keeper.dive) {
+      const d = keeper.diveT;
+      const ease = 1 - (1 - d) * (1 - d);
+      kx = GOAL.x + (keeper.dive.tx - GOAL.x) * ease;
+      ky = (GOAL.y + GOAL.h - 46) + (keeper.dive.ty - (GOAL.y + GOAL.h - 46)) * ease;
+      lean = Math.sign(keeper.dive.tx - GOAL.x) * ease * 0.9;
+      stretch = ease;
+    } else {
+      kx += Math.sin(t * 2.2) * 10;  // hazırlıkta sağa sola sallanır
+    }
+    ctx.save();
+    ctx.translate(kx, ky);
+    ctx.rotate(lean);
+    // bacaklar
+    ctx.fillStyle = '#14181d';
+    ctx.fillRect(-11, 22, 8, 24 - stretch * 8);
+    ctx.fillRect(3, 22, 8, 24 - stretch * 8);
+    // forma (sarı kaleci)
+    ctx.fillStyle = '#f1c40f';
+    ctx.fillRect(-14, -8, 28, 32);
+    ctx.fillStyle = '#e67e22';
+    ctx.fillRect(-14, -8, 28, 7);
+    // kollar: dalışta iki yana uzanır
+    ctx.strokeStyle = '#f1c40f';
+    ctx.lineWidth = 8;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-12, -2);
+    ctx.lineTo(-12 - 14 - stretch * 16, -10 - stretch * 18);
+    ctx.moveTo(12, -2);
+    ctx.lineTo(12 + 14 + stretch * 16, -10 - stretch * 18);
+    ctx.stroke();
+    // eldivenler
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(-12 - 14 - stretch * 16, -10 - stretch * 18, 6, 0, Math.PI * 2);
+    ctx.arc(12 + 14 + stretch * 16, -10 - stretch * 18, 6, 0, Math.PI * 2);
+    ctx.fill();
+    // kafa
+    ctx.fillStyle = '#e8b88a';
+    ctx.beginPath();
+    ctx.arc(0, -18, 11, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#5a3a1a';
+    ctx.beginPath();
+    ctx.arc(0, -21, 11, Math.PI, 0);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawBall() {
+    let bx = BALL_START.x, by = BALL_START.y, scale = 1;
+    if (state === STATE.FLY || state === STATE.RESULT) {
+      const t = state === STATE.FLY ? flyT : 1;
+      const ease = t;
+      bx = BALL_START.x + (shotTarget.x - BALL_START.x) * ease;
+      by = BALL_START.y + (shotTarget.y - BALL_START.y) * ease - Math.sin(Math.PI * t) * 40;
+      scale = 1 - 0.58 * ease;
+      // kurtarışta top dışarı seker
+      if (state === STATE.RESULT && shotResult === 'kurtardi') {
+        const rb = 1.2 - resultT;
+        bx += rb * 90 * Math.sign(bx - GOAL.x || 1);
+        by += rb * 120;
+        scale = 0.42 + rb * 0.2;
+      }
+    }
+    const r = 15 * scale;
+    // gölge
+    if (state === STATE.AIM || state === STATE.MENU) {
+      ctx.fillStyle = 'rgba(0,0,0,0.3)';
+      ctx.beginPath();
+      ctx.ellipse(bx, by + 18, 16, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // top
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(bx, by, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    // benekler
+    ctx.fillStyle = '#222';
+    ctx.beginPath();
+    ctx.arc(bx, by, r * 0.32, 0, Math.PI * 2);
+    ctx.fill();
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2 + 0.4;
+      ctx.beginPath();
+      ctx.arc(bx + Math.cos(a) * r * 0.75, by + Math.sin(a) * r * 0.75, r * 0.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawShotDots() {
+    // bu turun 5 atışı
+    for (let i = 0; i < 5; i++) {
+      const x = W / 2 - 60 + i * 30;
+      const res = shots[i];
+      ctx.beginPath();
+      ctx.arc(x, 178, 9, 0, Math.PI * 2);
+      ctx.fillStyle = res === 'gol' ? '#2ecc71' : res === undefined ? 'rgba(255,255,255,0.35)' : '#e74c3c';
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+  }
+
+  function drawHUD() {
+    ctx.fillStyle = 'rgba(12, 26, 10, 0.6)';
+    ctx.fillRect(0, 0, W, 30);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffd54a';
+    ctx.font = 'bold 16px sans-serif';
+    ctx.fillText('Tur ' + level, 118, 15);
+    ctx.fillStyle = '#9fe89a';
+    ctx.font = '14px sans-serif';
+    ctx.fillText('Bu tur: ' + goals + '/5   Toplam gol: ' + totalGoals + '   Rekor: ' + best, 185, 15);
+  }
+
+  function drawResultText() {
+    if (state !== STATE.RESULT) return;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const texts = { gol: 'GOOOL!', kurtardi: 'KURTARDI!', aut: 'AUT!' };
+    const cols = { gol: '#2ecc71', kurtardi: '#e74c3c', aut: '#ffb020' };
+    ctx.fillStyle = cols[shotResult];
+    ctx.font = 'bold ' + (shotResult === 'gol' ? 56 : 44) + 'px sans-serif';
+    ctx.fillText(texts[shotResult], W / 2, 420);
+  }
+
+  function drawCenteredPanel(lines) {
+    ctx.fillStyle = 'rgba(8, 18, 6, 0.82)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    let y = H * 0.28;
+    for (const [text, size, color] of lines) {
+      ctx.fillStyle = color;
+      ctx.font = 'bold ' + size + 'px sans-serif';
+      ctx.fillText(text, W / 2, y);
+      y += size * 1.6;
+    }
+  }
+
+  // ---- Ana döngü ----
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    update(dt);
+
+    drawStadium();
+    drawGoal();
+    drawKeeper();
+    drawBall();
+    if (state !== STATE.MENU) {
+      drawShotDots();
+      drawHUD();
+      drawResultText();
+    }
+
+    // nişan ipucu
+    if (state === STATE.AIM) {
+      const t = performance.now() / 1000;
+      ctx.fillStyle = 'rgba(255, 255, 255, ' + (0.5 + Math.sin(t * 3) * 0.2) + ')';
+      ctx.font = 'bold 17px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Kalede bir yere dokun: ŞUT!', W / 2, 500);
+    }
+
+    if (state === STATE.MENU) {
+      drawCenteredPanel([
+        ['PENALTI', 50, '#9fe89a'],
+        ['', 10, '#fff'],
+        ['TALHA STADI seninle!', 19, '#ddd'],
+        ['Kalede istediğin yere dokun, top oraya gider', 15, '#aaa'],
+        ['Kaleci kurtarmaya çalışır: köşeleri dene!', 15, '#aaa'],
+        ['Her turda 5 penaltı: 3+ gol at, tura geç', 15, '#ffb020'],
+        ['Her tur kaleci daha usta olur', 15, '#ff8080'],
+        ['Başlamak için dokun', 19, '#ffd54a'],
+      ]);
+    } else if (state === STATE.ROUND) {
+      if (goals >= 3) {
+        drawCenteredPanel([
+          ['TURU GEÇTİN!', 44, '#2ecc71'],
+          [goals + '/5 gol attın', 26, '#ffd54a'],
+          ['Toplam gol: ' + totalGoals, 20, '#9fe89a'],
+          ['', 10, '#fff'],
+          ['Tur ' + (level + 1) + ' için dokun', 19, '#ddd'],
+          ['(kaleci daha usta olacak!)', 15, '#ff8080'],
+        ]);
+      } else {
+        // yeterli gol yok: oyun bitti
+        state = STATE.OVER;
+      }
+    } else if (state === STATE.OVER) {
+      drawCenteredPanel([
+        ['OYUN BİTTİ', 44, '#ff6b6b'],
+        [goals + '/5 gol yetmedi (3 gerekliydi)', 19, '#ddd'],
+        ['Ulaştığın tur: ' + level, 22, '#9fe89a'],
+        ['Toplam gol: ' + totalGoals, 26, '#ffd54a'],
+        [totalGoals >= best && totalGoals > 0 ? '★ YENİ REKOR! ★' : 'Rekor: ' + best, 22, '#2ecc71'],
+        ['', 8, '#fff'],
+        ['Tekrar oynamak için dokun', 19, '#ddd'],
+      ]);
+    }
+
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
