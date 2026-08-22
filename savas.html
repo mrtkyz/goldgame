@@ -95,7 +95,7 @@
   const W = canvas.width, H = canvas.height;
 
   const HORIZON = 240;
-  const SIDE = 300;
+  const LATPX = 340;          // 1 dünya birimi yanal = kaç piksel (f=1'de)
   const ALT = 300;
 
   function fit() {
@@ -107,29 +107,53 @@
   fit();
 
   // ---- Oyun durumu ----
-  const STATE = { MENU: 0, PLAYING: 1, OVER: 2 };
+  const STATE = { MENU: 0, PLAYING: 1, FALLING: 2, OVER: 3 };
   let state = STATE.MENU;
   let paused = false;
 
-  let distance, playerX, playerH, speed, elapsed;
-  let enemies, myBullets, foeBullets, particles, floaters, trees;
-  let spawnT, fireT, lives, score, invTimer, flashTimer, nextTreeZ;
+  let wx, wz, heading, traveled, playerH, speed, elapsed;
+  let allies, enemies, bullets, particles, floaters, trees;
+  let spawnT, fireT, lives, score, invTimer, flashTimer;
+  let msg, msgT, reinforceT, playerFallT;
   let best = +(localStorage.getItem('savas-best') || 0);
 
+  // Filo düzeni: ikisi yanımızda/arkamızda, ikisi önde öncü
+  const SLOTS = [
+    { lat: -1.35, fwd: 1.2, hOff: 0.06 },
+    { lat: 1.35, fwd: 1.2, hOff: -0.04 },
+    { lat: -2.2, fwd: 7, hOff: 0.12 },
+    { lat: 2.2, fwd: 7, hOff: 0.02 },
+  ];
+
+  function slotWorld(s) {
+    const sin = Math.sin(heading), cos = Math.cos(heading);
+    return {
+      x: wx + sin * s.fwd + cos * s.lat,
+      z: wz + cos * s.fwd - sin * s.lat,
+    };
+  }
+
   function resetWorld() {
-    distance = 0; playerX = 0; playerH = 0.8; speed = 20; elapsed = 0;
-    enemies = []; myBullets = []; foeBullets = []; particles = []; floaters = []; trees = [];
-    spawnT = 1.2; fireT = 0; lives = 3; score = 0;
-    invTimer = 0; flashTimer = 0; nextTreeZ = 3;
-    while (nextTreeZ < 45) spawnTree();
+    wx = 0; wz = 0; heading = 0; traveled = 0;
+    playerH = 0.8; speed = 20; elapsed = 0;
+    enemies = []; bullets = []; particles = []; floaters = []; trees = [];
+    spawnT = 1.6; fireT = 0; lives = 3; score = 0;
+    invTimer = 0; flashTimer = 0;
+    msg = ''; msgT = 0; reinforceT = 0; playerFallT = 0;
+    allies = SLOTS.map(s => {
+      const p = slotWorld(s);
+      return { slot: s, x: p.x, z: p.z, h: playerH + s.hOff, alive: true, falling: false, fallT: 0, fireT: Math.random() };
+    });
+    for (let i = 0; i < 26; i++) spawnTree();
+  }
+  function around(minD, maxD) {
+    const ang = heading + (Math.random() - 0.5) * 3.2;
+    const d = minD + Math.random() * (maxD - minD);
+    return { x: wx + Math.sin(ang) * d, z: wz + Math.cos(ang) * d };
   }
   function spawnTree() {
-    trees.push({
-      z: nextTreeZ,
-      x: (Math.random() < 0.5 ? -1 : 1) * (0.5 + Math.random() * 1.4),
-      s: 0.7 + Math.random() * 0.6,
-    });
-    nextTreeZ += 2.5 + Math.random() * 3;
+    const p = around(5, 55);
+    trees.push({ x: p.x, z: p.z, s: 0.7 + Math.random() * 0.6 });
   }
 
   resetWorld();
@@ -141,7 +165,7 @@
     sndStart();
   }
 
-  function gameOver() {
+  function gameOverPanel() {
     state = STATE.OVER;
     sndOver();
     if (score > best) {
@@ -174,15 +198,17 @@
     o.stop(t0 + dur);
   }
   const sndStart = () => { beep(90, 0.5, 'sawtooth', 0.14); beep(140, 0.4, 'sawtooth', 0.12, 0.4); };
-  const sndGun = () => beep(950, 0.05, 'square', 0.03, 0, 500);
+  const sndGun = () => beep(950, 0.05, 'square', 0.028, 0, 500);
   const sndBoom = () => { beep(170, 0.28, 'sawtooth', 0.16, 0, 40); beep(85, 0.35, 'square', 0.12, 0.04, 30); };
   const sndHit = () => beep(140, 0.3, 'sawtooth', 0.2, 0, 50);
+  const sndAllyDown = () => { beep(500, 0.3, 'triangle', 0.13, 0, 200); beep(300, 0.5, 'triangle', 0.12, 0.3, 120); };
+  const sndReinforce = () => { [523, 659, 784].forEach((f, i) => beep(f, 0.14, 'triangle', 0.13, i * 0.1)); };
   const sndOver = () => { beep(330, 0.25, 'square', 0.1); beep(220, 0.4, 'square', 0.1, 0.2); };
 
   // ---- Girdi ----
   const keys = {};
   addEventListener('keydown', e => {
-    if (state !== STATE.PLAYING && (e.key === ' ' || e.key === 'Enter')) { startGame(); e.preventDefault(); return; }
+    if ((state === STATE.MENU || state === STATE.OVER) && (e.key === ' ' || e.key === 'Enter')) { startGame(); e.preventDefault(); return; }
     keys[e.key] = true;
     if ([' ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) e.preventDefault();
   });
@@ -197,7 +223,7 @@
     };
   }
   canvas.addEventListener('pointerdown', e => {
-    if (state !== STATE.PLAYING) { startGame(); return; }
+    if (state === STATE.MENU || state === STATE.OVER) { startGame(); return; }
     const p = pointerPos(e);
     pointerX = p.x; pointerY = p.y;
   });
@@ -228,9 +254,66 @@
   });
 
   const planeScreen = () => ({
-    x: W / 2 + playerX * 26,
+    x: W / 2,
     y: H - 150 - (playerH - 0.8) * 190,
   });
+
+  function transform(sx, sz) {
+    const dx = sx - wx, dz = sz - wz;
+    const sin = Math.sin(heading), cos = Math.cos(heading);
+    return {
+      fwd: dx * sin + dz * cos,
+      lat: dx * cos - dz * sin,
+    };
+  }
+
+  // Dünya nesnesi -> ekran (kamera oyuncunun 1 birim gerisinde)
+  function screenOf(sx, sz, h) {
+    const tr = transform(sx, sz);
+    const zRel = tr.fwd + 1;
+    if (zRel < 0.35) return null;
+    const f = 1 / zRel;
+    if (f > 1.6 || f < 0.022) return null;
+    const fc = Math.min(f, 1.6);
+    return {
+      f: fc,
+      x: W / 2 + tr.lat * fc * LATPX,
+      y: HORIZON + fc * (H - HORIZON) - h * ALT * fc,
+      gy: HORIZON + fc * (H - HORIZON),
+      fwd: tr.fwd,
+    };
+  }
+
+  function boomAt(sx, sz, h, color, n = 18) {
+    const p = screenOf(sx, sz, h);
+    if (!p) return;
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const s = 50 + Math.random() * 180;
+      particles.push({ x: p.x, y: p.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.5 + Math.random() * 0.3, color });
+    }
+  }
+  function flameAt(sx, sz, h) {
+    const p = screenOf(sx, sz, h);
+    if (!p) return;
+    for (let i = 0; i < 2; i++) {
+      particles.push({
+        x: p.x + (Math.random() - 0.5) * 14 * p.f,
+        y: p.y + (Math.random() - 0.5) * 10 * p.f,
+        vx: (Math.random() - 0.5) * 30,
+        vy: -40 - Math.random() * 50,
+        life: 0.4 + Math.random() * 0.3,
+        color: ['#ffb020', '#ff5030', '#555'][i % 3],
+      });
+    }
+  }
+  function addFloaterAt(sx, sz, h, text) {
+    const p = screenOf(sx, sz, h);
+    if (!p) return;
+    floaters.push({ x: p.x, y: p.y, text, life: 1 });
+  }
+
+  const aliveAllies = () => allies.filter(a => a.alive);
 
   // ---- Güncelleme ----
   let steerX = 0, steerY = 0;
@@ -238,7 +321,7 @@
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
       p.x += p.vx * dt; p.y += p.vy * dt;
-      p.vy += 220 * dt;
+      p.vy += 200 * dt;
       p.life -= dt;
       if (p.life <= 0) particles.splice(i, 1);
     }
@@ -247,18 +330,48 @@
       floaters[i].life -= dt;
       if (floaters[i].life <= 0) floaters.splice(i, 1);
     }
+    if (msgT > 0) msgT -= dt;
+
+    // Vurulduk: yanarak yere çakılıyoruz
+    if (state === STATE.FALLING) {
+      playerFallT += dt;
+      playerH -= 0.4 * dt;
+      wx += Math.sin(heading) * speed * 0.5 * dt;
+      wz += Math.cos(heading) * speed * 0.5 * dt;
+      const ps = planeScreen();
+      for (let i = 0; i < 3; i++) {
+        particles.push({
+          x: ps.x + (Math.random() - 0.5) * 50,
+          y: ps.y + (Math.random() - 0.5) * 30,
+          vx: (Math.random() - 0.5) * 40,
+          vy: -50 - Math.random() * 60,
+          life: 0.5,
+          color: ['#ffb020', '#ff5030', '#555'][i % 3],
+        });
+      }
+      if (playerH <= 0.03) {
+        for (let i = 0; i < 50; i++) {
+          const a = Math.random() * Math.PI * 2;
+          const s = 80 + Math.random() * 300;
+          particles.push({ x: ps.x, y: H - 60, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 100, life: 0.8, color: ['#ffb020', '#ff5030', '#ffe89a', '#555'][i % 4] });
+        }
+        sndBoom();
+        gameOverPanel();
+      }
+      return;
+    }
 
     if (state !== STATE.PLAYING || paused) return;
     elapsed += dt;
 
-    // Hareket: 4 yön
+    // Kontrol: sınırsız dönüş + irtifa
     let dx = 0, dy = 0;
     if (pointerX !== null) {
       const ps = planeScreen();
-      const diffX = pointerX - ps.x;
+      const diffX = pointerX - W / 2;
       const diffY = (pointerY - 40) - ps.y;
-      dx = Math.abs(diffX) > 10 ? Math.sign(diffX) * Math.min(1, Math.abs(diffX) / 50) : 0;
-      dy = Math.abs(diffY) > 10 ? Math.sign(diffY) * Math.min(1, Math.abs(diffY) / 50) : 0;
+      dx = Math.abs(diffX) > 24 ? Math.sign(diffX) * Math.min(1, Math.abs(diffX) / 130) : 0;
+      dy = Math.abs(diffY) > 12 ? Math.sign(diffY) * Math.min(1, Math.abs(diffY) / 60) : 0;
     } else {
       if (keys['ArrowLeft'] || keys['a'] || keys['A']) dx = -1;
       if (keys['ArrowRight'] || keys['d'] || keys['D']) dx = 1;
@@ -267,119 +380,206 @@
     }
     steerX += (dx - steerX) * dt * 6;
     steerY += (dy - steerY) * dt * 6;
-    playerX += dx * 1.9 * dt;
-    playerH -= dy * 1.3 * dt;
-    playerX = Math.max(-1.25, Math.min(1.25, playerX));
+    heading += dx * 1.15 * dt;      // tam tur serbest
+    playerH -= dy * 1.2 * dt;
     playerH = Math.max(0.25, Math.min(1.45, playerH));
 
-    distance += speed * dt;
+    const mvx = Math.sin(heading) * speed * dt;
+    const mvz = Math.cos(heading) * speed * dt;
+    wx += mvx;
+    wz += mvz;
+    traveled += speed * dt;
 
     // Ağaçlar
-    while (nextTreeZ < distance + 45) spawnTree();
-    trees = trees.filter(s => s.z - distance + 1 > 0.5);
+    trees = trees.filter(t => Math.hypot(t.x - wx, t.z - wz) < 60);
+    while (trees.length < 26) spawnTree();
 
-    // Makineli tüfek: otomatik ateş
+    // FİLO: arkadaşlar düzende uçar
+    for (const al of allies) {
+      if (al.falling) {
+        al.fallT += dt;
+        al.h -= 0.45 * dt;
+        al.x += Math.sin(heading) * speed * 0.4 * dt;
+        al.z += Math.cos(heading) * speed * 0.4 * dt;
+        flameAt(al.x, al.z, al.h);
+        if (al.h <= 0.02) {
+          al.falling = false;
+          boomAt(al.x, al.z, 0.05, '#ffb020', 26);
+          sndBoom();
+        }
+        continue;
+      }
+      if (!al.alive) continue;
+      // filoyla birlikte uçar, düzene yumuşakça oturur
+      al.x += mvx;
+      al.z += mvz;
+      const tp = slotWorld(al.slot);
+      al.x += (tp.x - al.x) * Math.min(1, dt * 2.2);
+      al.z += (tp.z - al.z) * Math.min(1, dt * 2.2);
+      al.h += (playerH + al.slot.hOff - al.h) * Math.min(1, dt * 2);
+
+      // arkadaşlar da savaşır: en yakın düşmana ateş
+      al.fireT -= dt;
+      if (al.fireT <= 0) {
+        let nearest = null, nd = 32;
+        for (const en of enemies) {
+          const d = Math.hypot(en.x - al.x, en.z - al.z);
+          if (d < nd) { nd = d; nearest = en; }
+        }
+        if (nearest) {
+          const tt = nd / 50;
+          bullets.push({
+            x: al.x, z: al.z, h: al.h,
+            vx: (nearest.x - al.x) / tt + (Math.random() - 0.5) * 6,
+            vz: (nearest.z - al.z) / tt + (Math.random() - 0.5) * 6,
+            vh: (nearest.h - al.h) / tt,
+            friendly: true, life: 1.2,
+          });
+          sndGun();
+        }
+        al.fireT = 0.55 + Math.random() * 0.3;
+      }
+    }
+
+    // Takviye: düşen arkadaşın yerine yenisi gelir
+    if (allies.some(a => !a.alive && !a.falling)) {
+      reinforceT -= dt;
+      if (reinforceT <= 0) {
+        const slot = allies.find(a => !a.alive && !a.falling);
+        const tp = slotWorld(slot.slot);
+        slot.alive = true;
+        slot.x = tp.x - Math.sin(heading) * 14;
+        slot.z = tp.z - Math.cos(heading) * 14;
+        slot.h = playerH + slot.slot.hOff;
+        slot.fallT = 0;
+        msg = 'TAKVİYE GELDİ!';
+        msgT = 2.2;
+        sndReinforce();
+        reinforceT = 16;
+      }
+    } else {
+      reinforceT = 16;
+    }
+
+    // Silahımız: otomatik ateş
     fireT -= dt;
     if (fireT <= 0) {
-      const gunSide = (myBullets.length % 2) ? -0.07 : 0.07;
-      myBullets.push({ z: distance + 1.4, x: playerX + gunSide, h: playerH });
+      const side = (bullets.length % 2 ? -0.35 : 0.35);
+      bullets.push({
+        x: wx + Math.sin(heading) * 1.5 + Math.cos(heading) * side,
+        z: wz + Math.cos(heading) * 1.5 - Math.sin(heading) * side,
+        h: playerH,
+        vx: Math.sin(heading) * 55,
+        vz: Math.cos(heading) * 55,
+        vh: 0,
+        friendly: true, life: 0.6,
+      });
       sndGun();
       fireT = 0.13;
     }
-    for (let i = myBullets.length - 1; i >= 0; i--) {
-      myBullets[i].z += 55 * dt;
-      if (myBullets[i].z - distance > 30) myBullets.splice(i, 1);
-    }
 
-    // Düşman üretimi: zamanla sıklaşır
+    // Düşman üretimi
     spawnT -= dt;
     if (spawnT <= 0) {
       const fast = elapsed > 40 && Math.random() < 0.35;
+      const p = around(30, 42);
       enemies.push({
-        z: distance + 38,
-        x: (Math.random() * 2 - 1) * 1.05,
+        x: p.x, z: p.z,
         h: 0.35 + Math.random() * 1.0,
-        closing: (fast ? 14 : 8) + Math.random() * 5,
-        weave: Math.random() < 0.4 ? 0.5 + Math.random() * 0.5 : 0,
-        phase: Math.random() * Math.PI * 2,
+        speed: (fast ? 30 : 24) + Math.random() * 4,
         fast,
         fireT: 1.2 + Math.random() * 2,
-        hp: 1,
+        phase: Math.random() * Math.PI * 2,
       });
-      spawnT = Math.max(0.7, 2.0 - elapsed * 0.02);
+      spawnT = Math.max(0.8, 2.0 - elapsed * 0.02);
     }
 
-    // Düşmanlar: bizimle uçar, yavaşça üstümüze gelirler (it dalaşı hissi)
+    // Düşmanlar: filoya doğru uçar, hedef seçip ateş eder
+    const targets = [{ x: wx, z: wz, h: playerH, player: true }, ...aliveAllies()];
     for (let i = enemies.length - 1; i >= 0; i--) {
       const en = enemies[i];
-      en.z += (speed - en.closing) * dt;
-      en.phase += dt * 3;
-      if (en.weave) {
-        en.x += Math.sin(en.phase) * en.weave * dt;
-        en.x = Math.max(-1.2, Math.min(1.2, en.x));
-      }
-      const zRel = en.z - distance + 1;
+      en.phase += dt * 2;
+      const dP = Math.hypot(wx - en.x, wz - en.z);
+      if (dP > 70) { enemies.splice(i, 1); continue; }
+      // bize doğru (hafif zikzaklı)
+      const dirA = Math.atan2(wx - en.x, wz - en.z) + Math.sin(en.phase) * 0.25;
+      en.x += Math.sin(dirA) * en.speed * dt;
+      en.z += Math.cos(dirA) * en.speed * dt;
+      en.h += (playerH - en.h) * dt * 0.3;
 
-      // ateş: yaklaşırken oyuncuya nişan alır
-      if (zRel > 5 && zRel < 22) {
+      // ateş: rastgele bir filo üyesine nişan
+      if (dP < 30) {
         en.fireT -= dt;
         if (en.fireT <= 0) {
-          const tt = zRel / 26;  // merminin varış süresi tahmini
-          foeBullets.push({
-            z: en.z - 1,
-            x: en.x,
-            h: en.h,
-            vx: (playerX - en.x) / tt,
-            vh: (playerH - en.h) / tt,
+          const tgt = Math.random() < 0.45 ? targets[0] : targets[Math.floor(Math.random() * targets.length)];
+          const d = Math.hypot(tgt.x - en.x, tgt.z - en.z) || 1;
+          const tt = d / 34;
+          bullets.push({
+            x: en.x, z: en.z, h: en.h,
+            vx: (tgt.x - en.x) / tt,
+            vz: (tgt.z - en.z) / tt,
+            vh: (tgt.h - en.h) / tt,
+            friendly: false, life: 2.2,
           });
-          en.fireT = Math.max(1.2, 2.6 - elapsed * 0.015) + Math.random() * 1.4;
+          en.fireT = Math.max(1.1, 2.4 - elapsed * 0.012) + Math.random() * 1.2;
         }
       }
 
-      // oyuncuyla çarpışma
-      if (zRel < 1.15 && zRel > 0.8 &&
-          Math.abs(en.x - playerX) < 0.28 && Math.abs(en.h - playerH) < 0.24) {
+      // bize çarpma
+      if (invTimer <= 0 && dP < 1.3 && Math.abs(en.h - playerH) < 0.24) {
         enemies.splice(i, 1);
-        boomAt(en.x, en.h, en.z, '#ff8050');
+        boomAt(en.x, en.z, en.h, '#ff8050');
         hurtPlayer();
         continue;
-      }
-      if (zRel < 0.5) { enemies.splice(i, 1); continue; }
-
-      // mermilerimizle vurulma
-      for (let j = myBullets.length - 1; j >= 0; j--) {
-        const b = myBullets[j];
-        if (Math.abs(b.z - en.z) < 1.6 &&
-            Math.abs(b.x - en.x) < 0.24 && Math.abs(b.h - en.h) < 0.22) {
-          myBullets.splice(j, 1);
-          en.hp--;
-          if (en.hp <= 0) {
-            const pts = en.fast ? 30 : 20;
-            score += pts;
-            addFloaterAt(en.x, en.h, en.z, '+' + pts);
-            boomAt(en.x, en.h, en.z, en.fast ? '#ff6b5e' : '#ffb020');
-            sndBoom();
-            enemies.splice(i, 1);
-          }
-          break;
-        }
       }
     }
 
-    // Düşman mermileri
-    for (let i = foeBullets.length - 1; i >= 0; i--) {
-      const b = foeBullets[i];
-      b.z += (speed - 26) * dt;
+    // Mermiler
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      const b = bullets[i];
       b.x += b.vx * dt;
+      b.z += b.vz * dt;
       b.h += b.vh * dt;
-      const zRel = b.z - distance + 1;
-      if (zRel < 1.1 && zRel > 0.85 &&
-          Math.abs(b.x - playerX) < 0.17 && Math.abs(b.h - playerH) < 0.15) {
-        foeBullets.splice(i, 1);
-        hurtPlayer();
-        continue;
+      b.life -= dt;
+      if (b.life <= 0 || b.h < 0 || b.h > 2) { bullets.splice(i, 1); continue; }
+
+      if (b.friendly) {
+        // düşmana isabet
+        for (let j = enemies.length - 1; j >= 0; j--) {
+          const en = enemies[j];
+          if (Math.hypot(b.x - en.x, b.z - en.z) < 1.5 && Math.abs(b.h - en.h) < 0.25) {
+            bullets.splice(i, 1);
+            const pts = en.fast ? 30 : 20;
+            score += pts;
+            addFloaterAt(en.x, en.z, en.h, '+' + pts);
+            boomAt(en.x, en.z, en.h, en.fast ? '#ff6b5e' : '#ffb020');
+            sndBoom();
+            enemies.splice(j, 1);
+            break;
+          }
+        }
+      } else {
+        // bize isabet
+        if (invTimer <= 0 && Math.hypot(b.x - wx, b.z - wz) < 1.1 && Math.abs(b.h - playerH) < 0.18) {
+          bullets.splice(i, 1);
+          hurtPlayer();
+          continue;
+        }
+        // arkadaşlara isabet: yanarak düşerler!
+        for (const al of aliveAllies()) {
+          if (Math.hypot(b.x - al.x, b.z - al.z) < 1.1 && Math.abs(b.h - al.h) < 0.2) {
+            bullets.splice(i, 1);
+            al.alive = false;
+            al.falling = true;
+            al.fallT = 0;
+            msg = 'ARKADAŞIMIZ VURULDU! (pilot atladı)';
+            msgT = 2.4;
+            sndAllyDown();
+            reinforceT = Math.min(reinforceT, 14);
+            break;
+          }
+        }
       }
-      if (zRel < 0.4) foeBullets.splice(i, 1);
     }
 
     if (invTimer > 0) invTimer -= dt;
@@ -398,54 +598,13 @@
       particles.push({ x: ps.x, y: ps.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.5, color: '#ff5030' });
     }
     sndHit();
-    if (lives <= 0) gameOver();
-  }
-
-  // ---- Çizim yardımcıları ----
-  const rowCenter = f => W / 2 - playerX * SIDE * f;
-  const flyY = (f, h) => HORIZON + f * (H - HORIZON) - h * ALT * f;
-
-  function screenOf(z, x, h) {
-    const zRel = z - distance + 1;
-    if (zRel < 0.4) return null;
-    const f = 1 / zRel;
-    if (f > 1.2 || f < 0.02) return null;
-    const fc = Math.min(f, 1.2);
-    return {
-      f: fc,
-      x: rowCenter(fc) + x * SIDE * fc,
-      y: flyY(fc, h),
-      gy: HORIZON + fc * (H - HORIZON),
-    };
-  }
-
-  function boomAt(x, h, z, color) {
-    const p = screenOf(z, x, h);
-    if (!p) return;
-    for (let i = 0; i < 18; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const s = 50 + Math.random() * 180;
-      particles.push({ x: p.x, y: p.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.5 + Math.random() * 0.3, color });
+    if (lives <= 0) {
+      state = STATE.FALLING;   // yanarak yere çakılıyoruz
+      playerFallT = 0;
     }
   }
-  function addFloaterAt(x, h, z, text) {
-    const p = screenOf(z, x, h);
-    if (!p) return;
-    floaters.push({ x: p.x, y: p.y, text, life: 1 });
-  }
 
-  function drawHeart(x, y, r) {
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.fillStyle = '#ff5d8f';
-    ctx.beginPath();
-    ctx.moveTo(0, r * 0.9);
-    ctx.bezierCurveTo(-r * 1.4, -r * 0.2, -r * 0.6, -r * 1.1, 0, -r * 0.3);
-    ctx.bezierCurveTo(r * 0.6, -r * 1.1, r * 1.4, -r * 0.2, 0, r * 0.9);
-    ctx.fill();
-    ctx.restore();
-  }
-
+  // ---- Çizim ----
   function drawSky() {
     const t = performance.now() / 1000;
     const g = ctx.createLinearGradient(0, 0, 0, HORIZON);
@@ -453,16 +612,21 @@
     g.addColorStop(1, '#cfe0ee');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, HORIZON);
+    // güneş yönle kayar
+    const sunX = ((-heading * 180 % (W + 200)) + W + 200) % (W + 200) - 100;
     ctx.beginPath();
-    ctx.arc(W * 0.78, 60, 28, 0, Math.PI * 2);
+    ctx.arc(sunX, 60, 28, 0, Math.PI * 2);
     ctx.fillStyle = '#ffe89a';
     ctx.fill();
+    // dağlar yönle kayar
     ctx.fillStyle = '#7b93a8';
-    for (const [mx, mw, mh] of [[-60, 280, 90], [160, 320, 120], [360, 260, 85]]) {
+    const mShift = ((-heading * 260 % 700) + 700) % 700;
+    for (const [mx, mw, mh] of [[-60, 280, 90], [160, 320, 120], [400, 260, 85], [620, 300, 100]]) {
+      const bx = ((mx + mShift) % 700) - 110;
       ctx.beginPath();
-      ctx.moveTo(mx, HORIZON);
-      ctx.lineTo(mx + mw / 2, HORIZON - mh);
-      ctx.lineTo(mx + mw, HORIZON);
+      ctx.moveTo(bx, HORIZON);
+      ctx.lineTo(bx + mw / 2, HORIZON - mh);
+      ctx.lineTo(bx + mw, HORIZON);
       ctx.closePath();
       ctx.fill();
     }
@@ -478,7 +642,7 @@
   function drawGround() {
     for (let sy = HORIZON; sy < H; sy++) {
       const f = (sy - HORIZON) / (H - HORIZON);
-      const z = distance + 1 / Math.max(f, 0.02);
+      const z = traveled + 1 / Math.max(f, 0.02);
       const band = Math.floor(z * 1.3) % 2;
       ctx.fillStyle = band ? '#4f8a52' : '#478048';
       ctx.fillRect(0, sy, W, 1);
@@ -501,13 +665,64 @@
     }
   }
 
+  // Dost jet (arkadan görünüm, küçük)
+  function drawFriendlyJet(x, y, sc, spin) {
+    const t = performance.now() / 1000;
+    ctx.save();
+    ctx.translate(x, y);
+    if (spin) ctx.rotate(spin);
+    const S = sc * 100;
+    // art yakıcı
+    ctx.fillStyle = '#4fc9f0';
+    ctx.beginPath();
+    ctx.moveTo(-0.06 * S, 0.22 * S);
+    ctx.lineTo(0, 0.22 * S + (0.14 + Math.sin(t * 30) * 0.05) * S);
+    ctx.lineTo(0.06 * S, 0.22 * S);
+    ctx.closePath();
+    ctx.fill();
+    // kanatlar (dost jetler mavi: çimende de gökte de seçilir)
+    ctx.fillStyle = '#4a7ab5';
+    ctx.beginPath();
+    ctx.moveTo(-0.85 * S, 0.18 * S);
+    ctx.lineTo(-0.08 * S, -0.12 * S);
+    ctx.lineTo(0.08 * S, -0.12 * S);
+    ctx.lineTo(0.85 * S, 0.18 * S);
+    ctx.lineTo(0.78 * S, 0.25 * S);
+    ctx.lineTo(-0.78 * S, 0.25 * S);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#1d3a5e';
+    ctx.lineWidth = Math.max(1, 0.03 * S);
+    ctx.stroke();
+    // gövde
+    ctx.fillStyle = '#7fb0e0';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 0.12 * S, 0.24 * S, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // çift kuyruk
+    ctx.fillStyle = '#33608f';
+    for (const s of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(s * 0.07 * S, -0.08 * S);
+      ctx.lineTo(s * 0.14 * S, -0.4 * S);
+      ctx.lineTo(s * 0.19 * S, -0.36 * S);
+      ctx.lineTo(s * 0.12 * S, -0.06 * S);
+      ctx.closePath();
+      ctx.fill();
+    }
+    // kokpit
+    ctx.fillStyle = '#4fc9f0';
+    ctx.beginPath();
+    ctx.ellipse(0, -0.12 * S, 0.06 * S, 0.09 * S, 0, Math.PI, 0);
+    ctx.fill();
+    ctx.restore();
+  }
+
   function drawEnemyJet(en, x, y, sc) {
-    // önden görünen düşman jeti
     const col = en.fast ? '#a83232' : '#5a6472';
     const wing = en.fast ? '#8a2828' : '#485260';
     ctx.save();
     ctx.translate(x, y);
-    // kanatlar
     ctx.fillStyle = wing;
     ctx.beginPath();
     ctx.moveTo(-64 * sc, 4 * sc);
@@ -518,7 +733,6 @@
     ctx.lineTo(-58 * sc, 9 * sc);
     ctx.closePath();
     ctx.fill();
-    // gövde + burun
     ctx.fillStyle = col;
     ctx.beginPath();
     ctx.ellipse(0, 0, 12 * sc, 16 * sc, 0, 0, Math.PI * 2);
@@ -527,10 +741,8 @@
     ctx.beginPath();
     ctx.arc(0, 2 * sc, 6 * sc, 0, Math.PI * 2);
     ctx.fill();
-    // kuyruk
     ctx.fillStyle = col;
     ctx.fillRect(-3 * sc, -22 * sc, 6 * sc, 12 * sc);
-    // kanopi parıltısı
     ctx.fillStyle = 'rgba(140, 200, 255, 0.8)';
     ctx.beginPath();
     ctx.ellipse(0, -8 * sc, 5 * sc, 4 * sc, 0, 0, Math.PI * 2);
@@ -542,9 +754,9 @@
     const t = performance.now() / 1000;
     const ps = planeScreen();
     const x = ps.x, y = ps.y + Math.sin(t * 2.4) * 2;
-    const bank = steerX * 0.4;
+    let bank = steerX * 0.4;
+    if (state === STATE.FALLING) bank = playerFallT * 2.5;
 
-    // gölge
     const shScale = 1.15 - playerH * 0.45;
     ctx.fillStyle = 'rgba(0,0,0,' + Math.max(0.05, 0.3 - playerH * 0.14) + ')';
     ctx.beginPath();
@@ -556,7 +768,6 @@
     ctx.rotate(bank);
     if (invTimer > 0 && Math.floor(invTimer * 8) % 2 === 0) ctx.globalAlpha = 0.45;
 
-    // art yakıcı alevleri
     const fl = 16 + Math.sin(t * 35) * 6;
     for (const s of [-8, 8]) {
       ctx.fillStyle = '#4fc9f0';
@@ -575,7 +786,6 @@
       ctx.fill();
     }
 
-    // delta kanatlar (kamuflaj yeşili)
     const wg = ctx.createLinearGradient(-100, 0, 100, 0);
     wg.addColorStop(0, '#4a5d3a');
     wg.addColorStop(0.5, '#66804e');
@@ -590,7 +800,6 @@
     ctx.lineTo(-92, 28 + steerY * 6);
     ctx.closePath();
     ctx.fill();
-    // kanat altı füzeler
     ctx.fillStyle = '#c8d2dc';
     for (const s of [-58, -34, 34, 58]) {
       ctx.fillRect(s - 3, 16 + steerY * 5, 6, 16);
@@ -604,7 +813,6 @@
       ctx.fillStyle = '#c8d2dc';
     }
 
-    // gövde
     const bg = ctx.createLinearGradient(-14, 0, 14, 0);
     bg.addColorStop(0, '#5a6d48');
     bg.addColorStop(0.5, '#7d9663');
@@ -614,7 +822,6 @@
     ctx.ellipse(0, 2, 14, 26, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // çift dikey kuyruk
     ctx.fillStyle = '#556747';
     for (const s of [-1, 1]) {
       ctx.beginPath();
@@ -625,14 +832,12 @@
       ctx.closePath();
       ctx.fill();
     }
-    // kuyruk işareti
     ctx.fillStyle = '#ffd54a';
     ctx.font = 'bold 11px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('T', 18, -38 - steerY * 5);
 
-    // kokpit
     ctx.fillStyle = '#4fc9f0';
     ctx.beginPath();
     ctx.ellipse(0, -14, 7, 10, 0, Math.PI, 0);
@@ -652,10 +857,30 @@
     ctx.fillText(score, 118, 22);
     ctx.fillStyle = '#c8e0a8';
     ctx.font = '15px sans-serif';
-    ctx.fillText('Rekor: ' + best, 118, 45);
+    ctx.fillText('Filo: ' + (aliveAllies().length + 1) + '/5   Rekor: ' + best, 118, 45);
     for (let i = 0; i < lives; i++) {
       drawHeart(W - 82 - i * 30, 26, 12);
     }
+    if (msgT > 0) {
+      ctx.globalAlpha = Math.min(1, msgT);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = msg.includes('TAKVİYE') ? '#7fff9e' : '#ffb020';
+      ctx.font = 'bold 22px sans-serif';
+      ctx.fillText(msg, W / 2, 92);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function drawHeart(x, y, r) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.fillStyle = '#ff5d8f';
+    ctx.beginPath();
+    ctx.moveTo(0, r * 0.9);
+    ctx.bezierCurveTo(-r * 1.4, -r * 0.2, -r * 0.6, -r * 1.1, 0, -r * 0.3);
+    ctx.bezierCurveTo(r * 0.6, -r * 1.1, r * 1.4, -r * 0.2, 0, r * 0.9);
+    ctx.fill();
+    ctx.restore();
   }
 
   function drawCenteredPanel(lines) {
@@ -663,7 +888,7 @@
     ctx.fillRect(0, 0, W, H);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
-    let y = H * 0.28;
+    let y = H * 0.27;
     for (const [text, size, color] of lines) {
       ctx.fillStyle = color;
       ctx.font = 'bold ' + size + 'px sans-serif';
@@ -682,41 +907,48 @@
     drawSky();
     drawGround();
 
-    // ağaçlar
-    for (const s of [...trees].sort((a, b) => b.z - a.z)) {
-      const p = screenOf(s.z, s.x, 0);
-      if (p) drawTree(p.x, p.gy, p.f, s.s);
+    // dünya nesneleri: uzaktan yakına
+    const items = [];
+    for (const s of trees) items.push({ kind: 'tree', s, x: s.x, z: s.z, h: 0 });
+    for (const en of enemies) items.push({ kind: 'enemy', s: en, x: en.x, z: en.z, h: en.h });
+    for (const al of allies) {
+      if (al.alive || al.falling) items.push({ kind: 'ally', s: al, x: al.x, z: al.z, h: al.h });
+    }
+    for (const b of bullets) items.push({ kind: 'bullet', s: b, x: b.x, z: b.z, h: b.h });
+
+    const drawList = [];
+    for (const it of items) {
+      const p = screenOf(it.x, it.z, it.h);
+      if (p) drawList.push({ ...it, p });
+    }
+    drawList.sort((a, b) => b.p.fwd - a.p.fwd);
+
+    for (const it of drawList) {
+      const p = it.p;
+      if (it.kind === 'tree') drawTree(p.x, p.gy, p.f, it.s.s);
+      else if (it.kind === 'enemy') drawEnemyJet(it.s, p.x, p.y, p.f);
+      else if (it.kind === 'ally') drawFriendlyJet(p.x, p.y, p.f, it.s.falling ? it.s.fallT * 3 : 0);
+      else {
+        // mermi
+        const b = it.s;
+        if (b.friendly) {
+          ctx.fillStyle = '#ffe060';
+          ctx.shadowColor = '#ffe060';
+          ctx.shadowBlur = 6;
+          ctx.fillRect(p.x - 2, p.y - 7 * p.f, 4, 14 * p.f);
+        } else {
+          ctx.fillStyle = '#ff5040';
+          ctx.shadowColor = '#ff5040';
+          ctx.shadowBlur = 8;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, Math.max(2.5, 5 * p.f), 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.shadowBlur = 0;
+      }
     }
 
-    // düşmanlar (uzak önce)
-    for (const en of [...enemies].sort((a, b) => b.z - a.z)) {
-      const p = screenOf(en.z, en.x, en.h);
-      if (p) drawEnemyJet(en, p.x, p.y, p.f);
-    }
-
-    // mermiler
-    for (const b of myBullets) {
-      const p = screenOf(b.z, b.x, b.h);
-      if (!p) continue;
-      ctx.fillStyle = '#ffe060';
-      ctx.shadowColor = '#ffe060';
-      ctx.shadowBlur = 6;
-      ctx.fillRect(p.x - 2, p.y - 8 * p.f, 4, 16 * p.f);
-      ctx.shadowBlur = 0;
-    }
-    for (const b of foeBullets) {
-      const p = screenOf(b.z, b.x, b.h);
-      if (!p) continue;
-      ctx.fillStyle = '#ff5040';
-      ctx.shadowColor = '#ff5040';
-      ctx.shadowBlur = 8;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, Math.max(2.5, 5 * p.f), 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-    }
-
-    drawPlayerJet();
+    if (state !== STATE.MENU) drawPlayerJet();
 
     for (const p of particles) {
       ctx.globalAlpha = Math.max(0, p.life / 0.8);
@@ -744,14 +976,15 @@
     if (state === STATE.MENU) {
       drawCenteredPanel([
         ['SAVAŞ PİLOTU', 44, '#c8e0a8'],
-        ['', 12, '#fff'],
-        ['Düşman jetleri karşıdan geliyor!', 18, '#ddd'],
-        ['Makineli tüfeğin kendiliğinden ateş eder', 15, '#aaa'],
-        ['Nişan almak için jetle hizalan', 15, '#aaa'],
-        ['Gri jet +20 · Kırmızı hızlı jet +30', 15, '#ffb020'],
-        ['Kızıl mermilerden ve jetlerden kaç!', 15, '#ff6b5e'],
-        ['Ok tuşları / WASD veya parmağınla sürükle', 15, '#aaa'],
-        ['Başlamak için tıkla veya SPACE', 19, '#ffd54a'],
+        ['', 10, '#fff'],
+        ['Filonla birlikte savaş!', 18, '#ddd'],
+        ['4 uçak arkadaşın seninle uçar: ikisi yanında,', 14, '#aaa'],
+        ['ikisi önde öncü - onlar da düşmana ateş eder', 14, '#aaa'],
+        ['Direksiyon serbest: istediğin yöne tam dönüş!', 14, '#7fff9e'],
+        ['Vurulan uçak yanarak yere çakılır...', 14, '#ff6b5e'],
+        ['ama takviye gelir!', 14, '#7fff9e'],
+        ['Ok tuşları / WASD veya parmağınla sürükle', 14, '#aaa'],
+        ['Başlamak için tıkla veya SPACE', 18, '#ffd54a'],
       ]);
     } else if (paused && state === STATE.PLAYING) {
       drawCenteredPanel([
@@ -761,7 +994,8 @@
       ]);
     } else if (state === STATE.OVER) {
       drawCenteredPanel([
-        ['VURULDUN!', 46, '#ff4030'],
+        ['YERE ÇAKILDIN!', 44, '#ff4030'],
+        ['(pilot paraşütle atladı)', 16, '#ddd'],
         ['Skorun: ' + score, 30, '#ffd54a'],
         [score >= best && score > 0 ? '★ YENİ REKOR! ★' : 'Rekor: ' + best, 24, '#7fff9e'],
         ['', 10, '#fff'],
