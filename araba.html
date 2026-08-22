@@ -159,12 +159,12 @@
   let hillCur, hillTarget, hillEnd;
   let trees, rocks, posts, nextTreeZ, nextRockZ, nextPostZ;
   let shake, rumbleAcc;
-  let chasing, chaseP, sirenAcc, sirenTone;
+  let chasing, chaseP, sirenAcc, sirenTone, escapeT;
   let best = +(localStorage.getItem('araba-best') || 0);
 
   function resetWorld() {
     distance = 0; speed = 0; playerX = 0; elapsed = 0; braking = false;
-    chasing = false; chaseP = 0; sirenAcc = 0; sirenTone = false;
+    chasing = false; chaseP = 0; sirenAcc = 0; sirenTone = false; escapeT = 0;
     hillCur = 0; hillTarget = 0; hillEnd = 20;
     trees = []; rocks = []; posts = [];
     nextTreeZ = 4; nextRockZ = 14; nextPostZ = 3;
@@ -239,6 +239,7 @@
   const sndStart = () => { beep(90, 0.3, 'sawtooth', 0.15); beep(140, 0.25, 'sawtooth', 0.12, 0.25); beep(200, 0.2, 'sawtooth', 0.1, 0.45); };
   const sndRumble = () => beep(75, 0.05, 'triangle', 0.06);
   const sndCaught = () => { beep(500, 0.3, 'square', 0.12); beep(380, 0.3, 'square', 0.12, 0.3); beep(260, 0.5, 'square', 0.12, 0.6); };
+  const sndEscape = () => { [523, 659, 784].forEach((f, i) => beep(f, 0.15, 'triangle', 0.14, i * 0.11)); };
 
   // ---- Girdi ----
   const keys = {};
@@ -341,9 +342,18 @@
     const kmh = speed * 5;
     if (kmh > 100) chasing = true;
     if (chasing) {
-      chaseP += (kmh > 100 ? 0.085 : -0.22) * dt;
-      if (chaseP <= 0) { chaseP = 0; chasing = false; }
-      else {
+      // KAÇIŞ YOLLARI: toprağa gir (polis takip edemez) veya 100 altına yavaşla
+      let delta;
+      if (offroad) delta = -0.55;
+      else if (kmh <= 100) delta = -0.32;
+      else delta = 0.085;
+      chaseP += delta * dt;
+      if (chaseP <= 0) {
+        chaseP = 0;
+        chasing = false;
+        escapeT = 2.4;
+        sndEscape();
+      } else {
         // siren
         sirenAcc += dt;
         if (sirenAcc > 0.5) {
@@ -358,6 +368,7 @@
         }
       }
     }
+    if (escapeT > 0) escapeT -= dt;
 
     // Sahne üretimi
     while (nextTreeZ < distance + 50) spawnTree();
@@ -710,13 +721,18 @@
 
     if (chasing && chaseP > 0) {
       const t = performance.now() / 1000;
-      // uyarı yazısı
+      // uyarı + kaçış ipucu
       if (Math.floor(t * 3) % 2 === 0) {
         ctx.textAlign = 'center';
         ctx.fillStyle = '#ff4030';
-        ctx.font = 'bold 26px sans-serif';
-        ctx.fillText('POLİS PEŞİNDE! Yavaşla!', W / 2, 84);
+        ctx.font = 'bold 24px sans-serif';
+        ctx.fillText('POLİS PEŞİNDE!', W / 2, 84);
       }
+      ctx.textAlign = 'center';
+      const escaping = Math.abs(playerX) > 1 || speed * 5 <= 100;
+      ctx.fillStyle = escaping ? '#7fff9e' : '#ffd54a';
+      ctx.font = 'bold 15px sans-serif';
+      ctx.fillText(escaping ? 'Polis geride kalıyor...' : 'Kaçış: FREN yap veya toprağa gir!', W / 2, 108);
       // yakalanma çubuğu
       ctx.textAlign = 'left';
       const pw = W - 236;
@@ -728,6 +744,15 @@
       const flash = Math.floor(t * 6) % 2 === 0;
       ctx.fillStyle = flash ? 'rgba(255,30,30,0.10)' : 'rgba(40,90,255,0.10)';
       ctx.fillRect(0, 0, W, H);
+    }
+    // polisi atlatma kutlaması
+    if (escapeT > 0) {
+      ctx.globalAlpha = Math.min(1, escapeT);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#7fff9e';
+      ctx.font = 'bold 30px sans-serif';
+      ctx.fillText('POLİSİ ATLATTIN!', W / 2, 100);
+      ctx.globalAlpha = 1;
     }
   }
 
@@ -777,7 +802,8 @@
         ['FREN: aşağı ok / S veya FREN pedalı', 16, '#ff8080'],
         ['Yön: sağ-sol ok / A-D veya ekran okları', 16, '#aaa'],
         ['DİKKAT: 100 km/s üstünde polis kovalar!', 16, '#ff6b5e'],
-        ['Yakalanmadan önce yavaşla!', 16, '#ffb020'],
+        ['Kaçış: fren yap veya toprak yola gir', 16, '#7fff9e'],
+        ['(toprakta polis takip edemez!)', 15, '#7fff9e'],
         ['Başlamak için tıkla veya SPACE', 20, '#ffd54a'],
       ]);
     } else if (paused && state === STATE.PLAYING) {
